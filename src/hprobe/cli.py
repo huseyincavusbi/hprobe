@@ -276,9 +276,9 @@ def cmd_transfer(args: argparse.Namespace) -> None:
     result = probe.score_on(samples, options_key=options_key, answer_key=answer_key)
     _print_score(result)
 
-    if args.output:
-        saved = probe.save(args.output)
-        print(f"\n  Saved → {saved}  +  {Path(args.output).with_suffix('.pkl').name}")
+    out_path = args.output or _default_output_path(args.model, args.data)
+    saved = probe.save(out_path)
+    print(f"\n  Saved → {saved}  +  {Path(out_path).with_suffix('.pkl').name}")
 
     print(sep + "\n")
 
@@ -433,7 +433,7 @@ def main() -> None:
     transfer_p.add_argument(
         "--output",
         default=None,
-        help="Base path to save transfer results (optional)",
+        help="Base path to save results (default: auto-named in cwd)",
     )
     transfer_p.add_argument(
         "--max-tokens",
