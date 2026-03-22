@@ -1,5 +1,8 @@
 """Tests for hprobe.probe — HProbe class."""
 
+import tempfile
+from pathlib import Path
+
 import numpy as np
 import pytest
 import torch
@@ -204,3 +207,36 @@ class TestFitAndScore:
         p = HProbe(MODEL, TOK, l1_C=0.5)
         p.fit_from_responses(samples)
         assert p.is_fitted_
+
+
+class TestSaveLoadTransfer:
+    def test_save_creates_json_and_pkl(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = str(Path(tmp) / "probe")
+            _PROBE.score()
+            saved = _PROBE.save(base)
+            assert Path(base).with_suffix(".json").exists()
+            assert Path(base).with_suffix(".pkl").exists()
+            assert saved == Path(base).with_suffix(".json")
+
+    def test_load_restores_probe(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = str(Path(tmp) / "probe")
+            _PROBE.save(base)
+            loaded = HProbe.load(base, MODEL, TOK)
+            assert loaded.is_fitted_
+            assert loaded.n_neurons_ == _PROBE.n_neurons_
+            assert loaded.h_neurons_ == _PROBE.h_neurons_
+
+    def test_load_missing_file_raises(self):
+        with pytest.raises(FileNotFoundError):
+            HProbe.load("/nonexistent/probe", MODEL, TOK)
+
+    def test_score_on_returns_dict(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = str(Path(tmp) / "probe")
+            _PROBE.save(base)
+            loaded = HProbe.load(base, MODEL, TOK)
+            result = loaded.score_on(SAMPLES, options_key="options", answer_key="answer")
+            assert "auroc" in result
+            assert "balanced_accuracy" in result

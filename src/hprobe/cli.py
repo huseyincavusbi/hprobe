@@ -65,11 +65,11 @@ def load_samples(path: str, n: int) -> List[Dict]:
 
 
 def _default_output_path(model: str, dataset_path: str) -> str:
-    """Build a default output filename: {model_safe}_{dataset}_{timestamp}.json"""
+    """Build a default output base path (no extension — save() adds .json and .pkl)."""
     model_safe = re.sub(r"[^a-zA-Z0-9_-]", "_", model)
     dataset_name = Path(dataset_path).stem
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    return f"{model_safe}_{dataset_name}_{ts}.json"
+    return f"{model_safe}_{dataset_name}_{ts}"
 
 
 def cmd_run(args: argparse.Namespace) -> None:
@@ -165,7 +165,9 @@ def cmd_run(args: argparse.Namespace) -> None:
     # Save results
     out_path = args.output or _default_output_path(args.model, args.data)
     saved = probe.save(out_path)
-    print(f"  Saved → {saved}")
+    from pathlib import Path as _Path
+
+    print(f"  Saved → {saved}  +  {_Path(out_path).with_suffix('.pkl').name}")
     print(sep + "\n")
 
 
