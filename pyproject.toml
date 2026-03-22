@@ -19,6 +19,9 @@ dependencies = [
     "accelerate>=1.0",
 ]
 
+[project.optional-dependencies]
+parquet = ["pyarrow>=14.0"]
+
 [dependency-groups]
 dev = [
     "pre-commit>=4.0",

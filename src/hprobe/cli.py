@@ -35,7 +35,7 @@ def format_keys(fmt: str) -> Tuple[str, str]:
 
 
 def load_samples(path: str, n: int) -> List[Dict]:
-    """Load up to n samples from a JSONL or JSON file."""
+    """Load up to n samples from a JSONL, JSON, or Parquet file."""
     p = Path(path)
     if not p.exists():
         print(f"Error: file not found: {path}", file=sys.stderr)
@@ -53,8 +53,21 @@ def load_samples(path: str, n: int) -> List[Dict]:
     elif p.suffix == ".json":
         data = json.loads(p.read_text())
         samples = (data if isinstance(data, list) else [data])[:n]
+    elif p.suffix == ".parquet":
+        try:
+            import pyarrow.parquet as pq
+        except ImportError:
+            print(
+                "Error: pyarrow is required for .parquet files. Run: pip install pyarrow",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        samples = pq.read_table(p).to_pylist()[:n]
     else:
-        print(f"Error: unsupported file format '{p.suffix}'. Use .jsonl or .json", file=sys.stderr)
+        print(
+            f"Error: unsupported file format '{p.suffix}'. Use .jsonl, .json, or .parquet",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     if not samples:

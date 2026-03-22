@@ -840,6 +840,13 @@ class HProbe:
         else:
             q = sample.get(question_key, "")
             opts = sample.get(options_key, {})
+            if isinstance(opts, str):
+                import ast
+
+                try:
+                    opts = ast.literal_eval(opts)
+                except Exception:
+                    opts = {}
             if isinstance(opts, list):
                 # HuggingFace datasets like MMLU use a list of choice texts
                 opts = {_MCQ_LETTERS[i]: v for i, v in enumerate(opts)}
