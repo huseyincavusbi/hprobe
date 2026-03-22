@@ -876,15 +876,29 @@ class HProbe:
         Handles:
             - Single letter: "A", "B", ...
             - Numeric index: 0→A, 1→B, ... (common in HuggingFace MCQ datasets)
+            - List wrapping: ["A"] or ["Ans. The key is B. ..."] (e.g. PLAB)
+            - Free-text: "Ans. The key is B. ..." → extracts first A-J letter after
+              common answer cue phrases
         """
+        import re
+
         raw = sample.get(answer_key)
         if raw is None:
             return None
+        # Unwrap single-element lists
+        if isinstance(raw, list):
+            raw = raw[0] if raw else None
+            if raw is None:
+                return None
         raw = str(raw).strip()
         if raw.upper() in _MCQ_LETTERS:
             return raw.upper()
         if raw.isdigit() and int(raw) < len(_MCQ_LETTERS):
             return _MCQ_LETTERS[int(raw)]
+        # Free-text fallback: "The key is B", "answer is C", "key: D", etc.
+        m = re.search(r"(?:key\s+is|answer\s+is|key\s*:)\s*([A-J])\b", raw, re.IGNORECASE)
+        if m:
+            return m.group(1).upper()
         return None
 
     # ------------------------------------------------------------------
