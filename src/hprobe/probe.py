@@ -1,5 +1,8 @@
 """HProbe — toolkit for H-Neuron discovery and causal validation."""
 
+import json
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 
 import numpy as np
@@ -107,6 +110,10 @@ class HProbe:
         self._y_val: Optional[np.ndarray] = None
         self._X_train_cache: Optional[np.ndarray] = None
         self._y_train_cache: Optional[np.ndarray] = None
+
+        # Results storage (set after score() / causal_validate())
+        self.score_results_: Optional[Dict] = None
+        self.cv_results_: Optional[Dict[float, float]] = None
 
     # ------------------------------------------------------------------
     # Public API
@@ -508,7 +515,7 @@ class HProbe:
         if gap is not None:
             print(f"[hprobe] AUROC: {auroc:.3f}  |  Random: {rand_auroc:.3f}  |  Gap: {gap:+.3f}")
 
-        return {
+        self.score_results_ = {
             "auroc": auroc,
             "balanced_accuracy": bal_acc,
             "random_baseline_auroc": rand_auroc,
@@ -517,6 +524,7 @@ class HProbe:
             "n_h_neurons": self.n_neurons_,
             "neuron_ratio_permille": self.neuron_ratio_,
         }
+        return self.score_results_
 
     def causal_validate(
         self,
@@ -560,7 +568,47 @@ class HProbe:
             results[alpha] = correct / total if total > 0 else 0.0
             print(f"  α={alpha:.1f} → accuracy {results[alpha]:.3f}")
 
+        self.cv_results_ = results
         return results
+
+    def save(self, path: str) -> Path:
+        """Save all probe results to a JSON file.
+
+        Serializes fit attributes, score results, and causal validation results.
+        Call after fit() at minimum; score() and causal_validate() results are
+        included automatically if they have been run.
+
+        Parameters
+        ----------
+        path : str
+            Destination file path (should end in .json).
+
+        Returns
+        -------
+        Path to the saved file.
+        """
+        if not self.is_fitted_:
+            raise RuntimeError(_NOT_FITTED_MSG)
+
+        out = {
+            "saved_at": datetime.now(timezone.utc).isoformat(),
+            "fit": {
+                "n_h_neurons": self.n_neurons_,
+                "neuron_ratio_permille": self.neuron_ratio_,
+                "accuracy": self.accuracy_,
+                "layer_distribution": {str(k): v for k, v in self.layer_distribution_.items()},
+                "h_neurons": [list(n) for n in self.h_neurons_],
+            },
+        }
+        if self.score_results_ is not None:
+            out["score"] = self.score_results_
+        if self.cv_results_ is not None:
+            out["causal_validation"] = {str(k): v for k, v in self.cv_results_.items()}
+
+        p = Path(path)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(out, indent=2))
+        return p
 
     # ------------------------------------------------------------------
     # Prompt building
