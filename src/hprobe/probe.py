@@ -1,6 +1,7 @@
 """HProbe — toolkit for H-Neuron discovery and causal validation."""
 
 import json
+import pickle
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
@@ -572,23 +573,30 @@ class HProbe:
         return results
 
     def save(self, path: str) -> Path:
-        """Save all probe results to a JSON file.
+        """Save probe results and classifier to disk.
 
-        Serializes fit attributes, score results, and causal validation results.
-        Call after fit() at minimum; score() and causal_validate() results are
-        included automatically if they have been run.
+        Writes two files:
+        - ``<path>.json`` — human-readable results (neurons, scores, cv)
+        - ``<path>.pkl``  — serialized classifier for transfer experiments
 
         Parameters
         ----------
         path : str
-            Destination file path (should end in .json).
+            Base path (e.g. "results/gemma_medqa"). Extensions are added automatically.
 
         Returns
         -------
-        Path to the saved file.
+        Path to the JSON file.
         """
         if not self.is_fitted_:
             raise RuntimeError(_NOT_FITTED_MSG)
+
+        p = Path(path)
+        p.parent.mkdir(parents=True, exist_ok=True)
+
+        # Ensure .json extension
+        json_path = p.with_suffix(".json")
+        pkl_path = p.with_suffix(".pkl")
 
         out = {
             "saved_at": datetime.now(timezone.utc).isoformat(),
@@ -605,10 +613,210 @@ class HProbe:
         if self.cv_results_ is not None:
             out["causal_validation"] = {str(k): v for k, v in self.cv_results_.items()}
 
-        p = Path(path)
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(json.dumps(out, indent=2))
-        return p
+        json_path.write_text(json.dumps(out, indent=2))
+
+        # Save classifier state for transfer experiments
+        clf_state = {
+            "clf": self._clf,
+            "top_k_idx": self._top_k_idx,
+            "col_mean": self._col_mean,
+            "col_std": self._col_std,
+            "h_neurons": self.h_neurons_,
+            "layers": self._layers,
+            "intermediate_dim": self._intermediate_dim,
+            "n_features": self._n_features,
+            "l1_C": self.l1_C,
+            "contrastive": self.contrastive,
+            "layer_stride": self.layer_stride,
+            "seed": self.seed,
+            "max_tokens": self.max_tokens,
+            "answer_cue": self._answer_cue,
+        }
+        pkl_path.write_bytes(pickle.dumps(clf_state))
+
+        return json_path
+
+    @classmethod
+    def load(cls, path: str, model: torch.nn.Module, tokenizer) -> "HProbe":
+        """Load a saved probe classifier and attach it to a (possibly different) model.
+
+        Use this to run transfer experiments: fit on an IT model, then load onto the
+        corresponding PT base model to test whether H-Neurons transfer.
+
+        Parameters
+        ----------
+        path : str
+            Base path used when saving (e.g. "results/gemma_medqa"). Will look for
+            ``<path>.pkl``.
+        model : transformers CausalLM
+            Model to attach the loaded probe to (can differ from the original).
+        tokenizer :
+            Matching tokenizer for the model.
+
+        Returns
+        -------
+        HProbe instance ready for score_on() or causal_validate().
+        """
+        pkl_path = Path(path).with_suffix(".pkl")
+        if not pkl_path.exists():
+            raise FileNotFoundError(f"No saved probe found at {pkl_path}")
+
+        state = pickle.loads(pkl_path.read_bytes())
+
+        probe = cls(
+            model=model,
+            tokenizer=tokenizer,
+            l1_C=state["l1_C"],
+            contrastive=state["contrastive"],
+            layer_stride=state["layer_stride"],
+            seed=state["seed"],
+            max_tokens=state["max_tokens"],
+        )
+        probe._clf = state["clf"]
+        probe._top_k_idx = state["top_k_idx"]
+        probe._col_mean = state["col_mean"]
+        probe._col_std = state["col_std"]
+        probe.h_neurons_ = state["h_neurons"]
+        probe._layers = state["layers"]
+        probe._intermediate_dim = state["intermediate_dim"]
+        probe._n_features = state["n_features"]
+        probe._answer_cue = state["answer_cue"]
+        probe.n_neurons_ = len(state["h_neurons"])
+        probe.layer_distribution_ = {}
+        for layer, _ in state["h_neurons"]:
+            probe.layer_distribution_[layer] = probe.layer_distribution_.get(layer, 0) + 1
+        total = probe._n_features if probe._n_features > 0 else 1
+        probe.neuron_ratio_ = (probe.n_neurons_ / total) * 1000
+        probe._col_norms = precompute_col_norms(model, probe._layers)
+        probe._letter_ids = probe._get_letter_ids()
+        probe.is_fitted_ = True
+
+        return probe
+
+    def score_on(
+        self,
+        samples: List[Dict],
+        question_key: str = "question",
+        options_key: str = "options",
+        answer_key: str = "answer",
+        prompt_fn: Optional[Callable[[Dict], str]] = None,
+    ) -> Dict:
+        """Extract activations from the attached model and score with the loaded classifier.
+
+        Used for transfer experiments: the classifier was fitted on a different model,
+        and we test whether the same H-Neurons predict hallucination on this model.
+
+        Parameters
+        ----------
+        samples : list of dict
+            MCQ samples in the same format used during fit().
+        question_key, options_key, answer_key, prompt_fn :
+            Same as fit().
+
+        Returns
+        -------
+        dict with auroc, balanced_accuracy, random_baseline_auroc, auroc_gap
+        """
+        if not self.is_fitted_:
+            raise RuntimeError(_NOT_FITTED_MSG)
+
+        X, y = [], []
+        for sample in tqdm(samples, desc="CETT extraction (transfer)"):
+            gt = self._parse_ground_truth(sample, answer_key)
+            if gt is None:
+                continue
+            prompt = self._build_prompt(
+                sample, question_key, options_key, prompt_fn, self._answer_cue
+            )
+            tokens = self._tokenize(prompt)
+            try:
+                if self.contrastive:
+                    cett_vec, logits = forward_cett(
+                        self.model, tokens, self._layers, self._col_norms
+                    )
+                    pred = self._predict_letter(logits)
+                    letter_token_id = self._letter_ids.get(pred)
+                    if letter_token_id is None:
+                        continue
+                    cett_vec = forward_cett_at_token(
+                        self.model, tokens, letter_token_id, self._layers, self._col_norms
+                    )
+                    label = 1 if pred != gt else 0
+                    X.append(cett_vec.numpy())
+                    y.append(label)
+                    X.append(cett_vec.numpy())
+                    y.append(0)
+                else:
+                    cett_vec, logits = forward_cett(
+                        self.model, tokens, self._layers, self._col_norms
+                    )
+                    pred = self._predict_letter(logits)
+                    label = 0 if pred == gt else 1
+                    X.append(cett_vec.numpy())
+                    y.append(label)
+            except Exception:
+                continue
+
+        if not X:
+            return {
+                "auroc": None,
+                "balanced_accuracy": None,
+                "random_baseline_auroc": None,
+                "auroc_gap": None,
+            }
+
+        X_arr = np.array(X)
+        y_arr = np.array(y)
+
+        # Normalise with the original training statistics
+        if self._col_mean is not None and self._col_std is not None:
+            X_norm = (X_arr[:, self._top_k_idx] - self._col_mean) / (self._col_std + 1e-8)
+        else:
+            X_norm = X_arr[:, self._top_k_idx]
+
+        try:
+            scores = self._clf.predict_proba(X_norm)[:, 1]
+            auroc = roc_auc_score(y_arr, scores)
+        except Exception:
+            auroc = None
+
+        preds = self._clf.predict(X_norm)
+        bal_acc = balanced_accuracy_score(y_arr, preds)
+
+        rand_auroc = None
+        if self.n_neurons_ > 0:
+            rng = np.random.RandomState(self.seed + 1)
+            rand_idx = rng.choice(
+                self._top_k_idx.shape[0],
+                size=min(self.n_neurons_, self._top_k_idx.shape[0]),
+                replace=False,
+            )
+            clf_rand = LogisticRegression(
+                solver="liblinear",
+                C=self.l1_C,
+                class_weight="balanced",
+                max_iter=1000,
+                random_state=self.seed,
+            )
+            try:
+                clf_rand.fit(X_norm[: len(X_norm) // 2, rand_idx], y_arr[: len(y_arr) // 2])
+                rand_scores = clf_rand.predict_proba(X_norm[len(X_norm) // 2 :, rand_idx])[:, 1]
+                rand_auroc = roc_auc_score(y_arr[len(y_arr) // 2 :], rand_scores)
+            except Exception:
+                pass
+
+        gap = (auroc - rand_auroc) if (auroc is not None and rand_auroc is not None) else None
+        print(f"[hprobe transfer] AUROC: {auroc:.3f}  |  Random: {rand_auroc}  |  Gap: {gap}")
+
+        result = {
+            "auroc": auroc,
+            "balanced_accuracy": bal_acc,
+            "random_baseline_auroc": rand_auroc,
+            "auroc_gap": gap,
+            "n_samples": len(X),
+        }
+        self.score_results_ = result
+        return result
 
     # ------------------------------------------------------------------
     # Prompt building
