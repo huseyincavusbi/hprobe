@@ -72,6 +72,75 @@ def _default_output_path(model: str, dataset_path: str) -> str:
     return f"{model_safe}_{dataset_name}_{ts}"
 
 
+def cmd_transfer(args: argparse.Namespace) -> None:
+    import torch
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+
+    from hprobe import HProbe, __version__
+
+    sep = "─" * 68
+    print(f"\nhprobe v{__version__}  |  transfer: {args.probe} → {args.model}")
+    print(sep)
+
+    samples = load_samples(args.data, args.samples)
+
+    fmt = args.format
+    if fmt == "auto":
+        fmt = detect_format(samples[0])
+        if fmt is None:
+            print(
+                "  Warning: could not auto-detect format. "
+                "Falling back to options_key='options', answer_key='answer'.",
+                file=sys.stderr,
+            )
+            options_key, answer_key = "options", "answer"
+        else:
+            options_key, answer_key = format_keys(fmt)
+    else:
+        options_key, answer_key = format_keys(fmt)
+
+    print(f"  Dataset:  {Path(args.data).name}  ({len(samples)} samples, format={fmt or 'auto'})")
+    print(f"  Keys:     options_key={options_key!r}  answer_key={answer_key!r}")
+
+    dtype_map = {
+        "auto": "auto",
+        "float16": torch.float16,
+        "bfloat16": torch.bfloat16,
+        "float32": torch.float32,
+    }
+    torch_dtype = dtype_map[args.dtype]
+
+    print(f"  Loading {args.model}...", end="", flush=True)
+    tokenizer = AutoTokenizer.from_pretrained(args.model)
+    model = AutoModelForCausalLM.from_pretrained(
+        args.model,
+        dtype=torch_dtype,
+        device_map=args.device,
+    )
+    model.eval()
+    print(" done")
+
+    print(f"  Loading probe from {args.probe}...", end="", flush=True)
+    probe = HProbe.load(args.probe, model, tokenizer)
+    print(f" done  ({probe.n_neurons_} H-Neurons)")
+
+    print("\n  Scoring (transfer)...")
+    result = probe.score_on(samples, options_key=options_key, answer_key=answer_key)
+
+    def _fmt(v):
+        return f"{v:.3f}" if v is not None else "n/a"
+
+    print(f"  AUROC:           {_fmt(result['auroc'])}")
+    print(f"  Random baseline: {_fmt(result['random_baseline_auroc'])}")
+    print(
+        f"  AUROC gap:      {result['auroc_gap']:+.3f}"
+        if result["auroc_gap"] is not None
+        else "  AUROC gap:       n/a"
+    )
+    print(f"  Balanced acc:    {_fmt(result['balanced_accuracy'])}")
+    print(sep + "\n")
+
+
 def cmd_run(args: argparse.Namespace) -> None:
     import torch
     from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -214,9 +283,38 @@ def main() -> None:
         help="Path to save JSON results (default: auto-named in cwd)",
     )
 
+    transfer_p = subparsers.add_parser(
+        "transfer", help="Score a saved probe on a different model (transfer experiment)"
+    )
+    transfer_p.add_argument(
+        "--probe", required=True, help="Base path of saved probe (e.g. results/gemma_medqa)"
+    )
+    transfer_p.add_argument("--model", required=True, help="HuggingFace model ID for target model")
+    transfer_p.add_argument("--data", required=True, help="Path to .jsonl or .json dataset file")
+    transfer_p.add_argument(
+        "--format",
+        choices=["auto", "mmlu", "medqa", "medmcqa"],
+        default="auto",
+        help="Dataset format (default: auto-detect)",
+    )
+    transfer_p.add_argument(
+        "--samples", type=int, default=100, help="Number of samples (default: 100)"
+    )
+    transfer_p.add_argument(
+        "--device", default="auto", help="Device: auto, cpu, mps, cuda (default: auto)"
+    )
+    transfer_p.add_argument(
+        "--dtype",
+        choices=["auto", "float16", "bfloat16", "float32"],
+        default="auto",
+        help="Model dtype (default: auto)",
+    )
+
     args = parser.parse_args()
     if args.command == "run":
         cmd_run(args)
+    elif args.command == "transfer":
+        cmd_transfer(args)
 
 
 if __name__ == "__main__":
