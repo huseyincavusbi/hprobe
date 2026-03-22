@@ -42,9 +42,9 @@ class HProbe:
     l1_C : float
         Inverse L1 regularisation strength. Lower = sparser neuron set. Default 0.01.
     contrastive : bool
-        If True, uses 3-vs-1 labeling: CETT captured at the generated answer token,
+        If True (default), uses 3-vs-1 labeling: CETT captured at the generated answer token,
         hallucinatory answers labeled 1, everything else 0.
-        If False (default), binary correct/incorrect labels at last prompt token.
+        If False, binary correct/incorrect labels at last prompt token.
     layer_stride : int
         Sample every Nth layer. 1 = all layers, 2 = even layers only (faster).
     validation_split : float
@@ -68,7 +68,7 @@ class HProbe:
         model: torch.nn.Module,
         tokenizer,
         l1_C: float = 0.01,
-        contrastive: bool = False,
+        contrastive: bool = True,
         layer_stride: int = 1,
         validation_split: float = 0.2,
         seed: int = 42,
