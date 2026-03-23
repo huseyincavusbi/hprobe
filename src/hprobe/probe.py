@@ -567,7 +567,6 @@ class HProbe:
                     torch.cuda.empty_cache()
 
             results[alpha] = correct / total if total > 0 else 0.0
-            print(f"  α={alpha:.1f} → accuracy {results[alpha]:.3f}")
 
         self.cv_results_ = results
         return results
@@ -806,7 +805,9 @@ class HProbe:
                 pass
 
         gap = (auroc - rand_auroc) if (auroc is not None and rand_auroc is not None) else None
-        print(f"[hprobe transfer] AUROC: {auroc:.3f}  |  Random: {rand_auroc}  |  Gap: {gap}")
+        rand_str = f"{rand_auroc:.3f}" if rand_auroc is not None else "n/a"
+        gap_str = f"{gap:+.3f}" if gap is not None else "n/a"
+        print(f"[hprobe transfer] AUROC: {auroc:.3f}  |  Random: {rand_str}  |  Gap: {gap_str}")
 
         result = {
             "auroc": auroc,
