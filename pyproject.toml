@@ -4,12 +4,18 @@ build-backend = "hatchling.build"
 
 [project]
 name = "hprobe"
-version = "0.2.0"
+version = "0.3.0"
 description = "Hallucination neuron discovery and causal validation for transformer LLMs"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
 keywords = ["hallucination", "interpretability", "llm", "neurons", "probing"]
+authors = [{ name = "Huseyin Cavus", email = "huseyincavus@proton.me" }]
+
+[project.urls]
+Homepage = "https://github.com/huseyincavusbi/hprobe"
+Repository = "https://github.com/huseyincavusbi/hprobe"
+Issues = "https://github.com/huseyincavusbi/hprobe/issues"
 dependencies = [
     "torch>=2.0",
     "transformers>=4.40",
