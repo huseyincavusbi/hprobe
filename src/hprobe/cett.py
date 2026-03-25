@@ -263,6 +263,156 @@ def forward_cett_span(
     return torch.cat(cett_parts, dim=0)
 
 
+def forward_cett_batch(
+    model: torch.nn.Module,
+    batch_tokens: Dict[str, torch.Tensor],
+    layers: List[int],
+    col_norms: Dict[int, torch.Tensor],
+    token_positions: List[int],
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """Batched forward pass — extract CETT for each sample at its token position.
+
+    Parameters
+    ----------
+    batch_tokens : tokenizer output with batch_size > 1 (must be left-padded)
+    token_positions : last real token position per sample (index into padded seq)
+
+    Returns
+    -------
+    cett_matrix : (batch_size, n_layers * intermediate_dim) float32
+    logits_matrix : (batch_size, vocab_size) float32
+    """
+    batch_size = batch_tokens["input_ids"].shape[0]
+    z_cache: Dict[int, torch.Tensor] = {}
+    h_cache: Dict[int, torch.Tensor] = {}
+    handles = []
+
+    for layer_idx in layers:
+        down_proj = get_mlp_down_proj(model, layer_idx)
+
+        def make_hook(idx: int):
+            def hook(module, input, output):
+                z_cache[idx] = input[0].detach().float().cpu()
+                h_cache[idx] = output.detach().float().cpu()
+                return output
+
+            return hook
+
+        handles.append(down_proj.register_forward_hook(make_hook(layer_idx)))
+
+    # Compute position_ids so real tokens get 0-based positions regardless of left-padding
+    if "attention_mask" in batch_tokens:
+        position_ids = (batch_tokens["attention_mask"].cumsum(dim=-1) - 1).clamp(min=0)
+    else:
+        seq_len = batch_tokens["input_ids"].shape[1]
+        position_ids = (
+            torch.arange(seq_len, device=batch_tokens["input_ids"].device)
+            .unsqueeze(0)
+            .expand(batch_size, -1)
+        )
+
+    try:
+        with torch.no_grad():
+            out = model(**batch_tokens, position_ids=position_ids)
+    finally:
+        for h in handles:
+            h.remove()
+
+    logits_matrix = torch.stack(
+        [out.logits[i, token_positions[i], :].detach().float().cpu() for i in range(batch_size)]
+    )
+
+    cett_rows = []
+    for i in range(batch_size):
+        pos = token_positions[i]
+        cett_parts = []
+        for layer_idx in layers:
+            z = z_cache[layer_idx][i, pos, :]
+            h = h_cache[layer_idx][i, pos, :]
+            h_norm = torch.norm(h).item() + 1e-8
+            cett = (z * col_norms[layer_idx]) / h_norm
+            cett_parts.append(cett)
+        cett_rows.append(torch.cat(cett_parts, dim=0))
+
+    return torch.stack(cett_rows), logits_matrix
+
+
+def forward_cett_at_token_batch(
+    model: torch.nn.Module,
+    batch_tokens: Dict[str, torch.Tensor],
+    extra_token_ids: List[int],
+    layers: List[int],
+    col_norms: Dict[int, torch.Tensor],
+) -> torch.Tensor:
+    """Batched version of forward_cett_at_token.
+
+    Appends one answer token per sample and captures CETT at the last position.
+
+    Parameters
+    ----------
+    extra_token_ids : answer token id per sample
+
+    Returns
+    -------
+    cett_matrix : (batch_size, n_layers * intermediate_dim) float32
+    """
+    batch_size = batch_tokens["input_ids"].shape[0]
+    device = batch_tokens["input_ids"].device
+
+    extra_t = torch.tensor(extra_token_ids, device=device).unsqueeze(1)
+    extended_ids = torch.cat([batch_tokens["input_ids"], extra_t], dim=1)
+
+    extended: Dict[str, torch.Tensor] = {"input_ids": extended_ids}
+    if "attention_mask" in batch_tokens:
+        m = batch_tokens["attention_mask"]
+        extended["attention_mask"] = torch.cat(
+            [m, torch.ones((batch_size, 1), device=device, dtype=m.dtype)], dim=1
+        )
+
+    z_cache: Dict[int, torch.Tensor] = {}
+    h_cache: Dict[int, torch.Tensor] = {}
+    handles = []
+
+    for layer_idx in layers:
+        down_proj = get_mlp_down_proj(model, layer_idx)
+
+        def make_hook(idx: int):
+            def hook(module, input, output):
+                z_cache[idx] = input[0].detach().float().cpu()
+                h_cache[idx] = output.detach().float().cpu()
+                return output
+
+            return hook
+
+        handles.append(down_proj.register_forward_hook(make_hook(layer_idx)))
+
+    if "attention_mask" in extended:
+        position_ids = (extended["attention_mask"].cumsum(dim=-1) - 1).clamp(min=0)
+    else:
+        seq_len = extended["input_ids"].shape[1]
+        position_ids = torch.arange(seq_len, device=device).unsqueeze(0).expand(batch_size, -1)
+
+    try:
+        with torch.no_grad():
+            model(**extended, position_ids=position_ids)
+    finally:
+        for h in handles:
+            h.remove()
+
+    cett_rows = []
+    for i in range(batch_size):
+        cett_parts = []
+        for layer_idx in layers:
+            z = z_cache[layer_idx][i, -1, :]
+            h = h_cache[layer_idx][i, -1, :]
+            h_norm = torch.norm(h).item() + 1e-8
+            cett = (z * col_norms[layer_idx]) / h_norm
+            cett_parts.append(cett)
+        cett_rows.append(torch.cat(cett_parts, dim=0))
+
+    return torch.stack(cett_rows)
+
+
 def scale_h_neurons(
     model: torch.nn.Module,
     tokens: Dict[str, torch.Tensor],

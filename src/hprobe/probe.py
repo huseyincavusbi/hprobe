@@ -17,6 +17,8 @@ from .cett import (
     available_layers,
     forward_cett,
     forward_cett_at_token,
+    forward_cett_at_token_batch,
+    forward_cett_batch,
     forward_cett_span,
     precompute_col_norms,
     scale_h_neurons,
@@ -74,10 +76,12 @@ class HProbe:
         validation_split: float = 0.2,
         seed: int = 42,
         max_tokens: int = 1024,
+        batch_size: int = 1,
     ):
         self.model = model
         self.tokenizer = tokenizer
         self.l1_C = l1_C
+        self.batch_size = batch_size
         self.contrastive = contrastive
         self.layer_stride = layer_stride
         self.validation_split = validation_split
@@ -966,6 +970,121 @@ class HProbe:
         per_sample = []
         skipped = 0
 
+        device = next(self.model.parameters()).device
+
+        if self.batch_size > 1:
+            orig_padding_side = self.tokenizer.padding_side
+            self.tokenizer.padding_side = "right"
+
+        batch_buf: list = []  # list of (sample, gt, prompt) waiting to be processed
+
+        def _flush_batch(buf):
+            nonlocal skipped
+            if not buf:
+                return
+
+            prompts = [b[2] for b in buf]
+            enc = self.tokenizer(
+                prompts,
+                return_tensors="pt",
+                padding=True,
+                truncation=True,
+                max_length=self.max_tokens,
+            ).to(device)
+
+            # last real token position per sample (for logits)
+            if "attention_mask" in enc:
+                last_positions = (enc["attention_mask"].sum(dim=1) - 1).tolist()
+            else:
+                last_positions = [enc["input_ids"].shape[1] - 1] * len(buf)
+
+            try:
+                cett_matrix, logits_matrix = forward_cett_batch(
+                    self.model,
+                    enc,
+                    self._layers,
+                    self._col_norms,
+                    [int(p) for p in last_positions],
+                )
+            except Exception:
+                skipped += len(buf)
+                return
+
+            if self.contrastive:
+                preds = [self._predict_letter(logits_matrix[i]) for i in range(len(buf))]
+                letter_ids = [self._letter_ids.get(p) for p in preds]
+
+                # filter out samples with unknown letter token
+                valid_idx = [i for i, lid in enumerate(letter_ids) if lid is not None]
+                if not valid_idx:
+                    skipped += len(buf)
+                    return
+
+                valid_enc_ids = enc["input_ids"][valid_idx]
+                valid_enc_mask = enc.get("attention_mask")
+                valid_enc: Dict[str, torch.Tensor] = {"input_ids": valid_enc_ids}
+                if valid_enc_mask is not None:
+                    valid_enc["attention_mask"] = valid_enc_mask[valid_idx]
+
+                try:
+                    cett_ans_matrix = forward_cett_at_token_batch(
+                        self.model,
+                        valid_enc,
+                        [letter_ids[i] for i in valid_idx],
+                        self._layers,
+                        self._col_norms,
+                    )
+                except Exception:
+                    skipped += len(buf)
+                    return
+
+                for j, i in enumerate(valid_idx):
+                    sample, gt, prompt = buf[i]
+                    pred = preds[i]
+                    is_correct = pred == gt
+                    sample_pos = len(valid_prompts)
+                    valid_prompts.append(prompt)
+                    valid_gt.append(gt)
+                    per_sample.append(
+                        {"predicted": pred, "ground_truth": gt, "is_correct": is_correct}
+                    )
+
+                    ans = np.nan_to_num(cett_ans_matrix[j].numpy().astype(np.float32))
+                    oth = np.nan_to_num(cett_matrix[i].numpy().astype(np.float32))
+
+                    cett_raw.append(ans)
+                    train_labels.append(0 if is_correct else 1)
+                    row_to_sample.append(sample_pos)
+
+                    cett_raw.append(oth)
+                    train_labels.append(0)
+                    row_to_sample.append(sample_pos)
+
+                    for vec in (ans, oth):
+                        self._welford_update(vec)
+
+                skipped += len(buf) - len(valid_idx)
+
+            else:
+                for i, (sample, gt, prompt) in enumerate(buf):
+                    pred = self._predict_letter(logits_matrix[i])
+                    is_correct = pred == gt
+                    sample_pos = len(valid_prompts)
+                    valid_prompts.append(prompt)
+                    valid_gt.append(gt)
+                    per_sample.append(
+                        {"predicted": pred, "ground_truth": gt, "is_correct": is_correct}
+                    )
+
+                    vec = np.nan_to_num(cett_matrix[i].numpy().astype(np.float32))
+                    cett_raw.append(vec)
+                    train_labels.append(int(is_correct))
+                    row_to_sample.append(sample_pos)
+                    self._welford_update(vec)
+
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
         for sample in tqdm(samples, desc="CETT extraction"):
             gt = self._parse_ground_truth(sample, answer_key)
             if gt is None:
@@ -973,6 +1092,15 @@ class HProbe:
                 continue
 
             prompt = self._build_prompt(sample, question_key, options_key, prompt_fn, answer_cue)
+
+            if self.batch_size > 1:
+                batch_buf.append((sample, gt, prompt))
+                if len(batch_buf) >= self.batch_size:
+                    _flush_batch(batch_buf)
+                    batch_buf = []
+                continue
+
+            # --- single-sample path (batch_size=1) ---
             tokens = self._tokenize(prompt)
 
             try:
@@ -996,7 +1124,6 @@ class HProbe:
             )
 
             if self.contrastive:
-                # Second pass: CETT at the generated answer token
                 letter_token_id = self._letter_ids.get(pred)
                 if letter_token_id is None:
                     valid_prompts.pop()
@@ -1018,12 +1145,10 @@ class HProbe:
                 ans = np.nan_to_num(cett_ans_vec.numpy().astype(np.float32))
                 oth = np.nan_to_num(cett_vec.numpy().astype(np.float32))
 
-                # Answer-token row: y=1 if hallucinatory, y=0 if faithful
                 cett_raw.append(ans)
                 train_labels.append(0 if is_correct else 1)
                 row_to_sample.append(sample_pos)
 
-                # Other-token row: always y=0
                 cett_raw.append(oth)
                 train_labels.append(0)
                 row_to_sample.append(sample_pos)
@@ -1040,6 +1165,13 @@ class HProbe:
 
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
+
+        # flush remaining batch
+        if batch_buf:
+            _flush_batch(batch_buf)
+
+        if self.batch_size > 1:
+            self.tokenizer.padding_side = orig_padding_side
 
         if skipped:
             print(f"[hprobe] Skipped: {skipped}")
