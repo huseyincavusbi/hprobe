@@ -168,6 +168,7 @@ def cmd_run(args: argparse.Namespace) -> None:
         validation_split=args.validation_split,
         seed=args.seed,
         max_tokens=args.max_tokens,
+        batch_size=args.batch_size,
     )
     probe.fit(samples, options_key=options_key, answer_key=answer_key)
     probe.model_id = args.model
@@ -348,6 +349,13 @@ def _add_common_probe_args(p):
         "--alphas",
         default=None,
         help="Comma-separated alpha values for causal validation (default: 0.0,0.5,1.0,1.5,2.0)",
+    )
+    p.add_argument(
+        "--batch-size",
+        type=int,
+        default=1,
+        dest="batch_size",
+        help="Batch size for CETT extraction (default: 1). Use 8-16 on GPU.",
     )
 
 
