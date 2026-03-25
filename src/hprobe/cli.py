@@ -35,7 +35,7 @@ def format_keys(fmt: str) -> Tuple[str, str]:
 
 
 def load_samples(path: str, n: int) -> List[Dict]:
-    """Load up to n samples from a JSONL, JSON, or Parquet file."""
+    """Load up to n samples from a JSONL, JSON, or Parquet file. n=-1 loads all."""
     p = Path(path)
     if not p.exists():
         print(f"Error: file not found: {path}", file=sys.stderr)
@@ -48,15 +48,19 @@ def load_samples(path: str, n: int) -> List[Dict]:
                 line = line.strip()
                 if line:
                     samples.append(json.loads(line))
-                    if len(samples) >= n:
+                    if n != -1 and len(samples) >= n:
                         break
     elif p.suffix == ".json":
         data = json.loads(p.read_text())
-        samples = (data if isinstance(data, list) else [data])[:n]
+        samples = (
+            (data if isinstance(data, list) else [data])
+            if n == -1
+            else (data if isinstance(data, list) else [data])[:n]
+        )
     elif p.suffix == ".parquet":
         import pyarrow.parquet as pq
 
-        samples = pq.read_table(p).to_pylist()[:n]
+        samples = pq.read_table(p).to_pylist() if n == -1 else pq.read_table(p).to_pylist()[:n]
     else:
         print(
             f"Error: unsupported file format '{p.suffix}'. Use .jsonl, .json, or .parquet.",
@@ -134,7 +138,9 @@ def cmd_run(args: argparse.Namespace) -> None:
     from hprobe import HProbe, __version__
 
     sep = "─" * 68
-    print(f"\nhprobe v{__version__}  |  model: {args.model}  |  samples: {args.samples}")
+    print(
+        f"\nhprobe v{__version__}  |  model: {args.model}  |  samples: {'all' if args.samples == -1 else args.samples}"
+    )
     print(sep)
 
     samples = load_samples(args.data, args.samples)
@@ -164,6 +170,9 @@ def cmd_run(args: argparse.Namespace) -> None:
         max_tokens=args.max_tokens,
     )
     probe.fit(samples, options_key=options_key, answer_key=answer_key)
+    probe.model_id = args.model
+    probe.dataset_name = Path(args.data).name
+    probe.n_samples_used = len(samples)
     print(" done")
     print(f"  H-Neurons:   {probe.n_neurons_}  ({probe.neuron_ratio_:.3f}‰ of all features)")
     print(f"  Accuracy:    {probe.accuracy_:.3f}")
@@ -232,6 +241,9 @@ def cmd_responses(args: argparse.Namespace) -> None:
         label_key=args.label_key,
         aggregation=args.aggregation,
     )
+    probe.model_id = args.model
+    probe.dataset_name = Path(args.data).name
+    probe.n_samples_used = len(samples)
     print(" done")
     print(f"  H-Neurons:   {probe.n_neurons_}  ({probe.neuron_ratio_:.3f}‰ of all features)")
     print(f"  Accuracy:    {probe.accuracy_:.3f}")
@@ -359,7 +371,9 @@ def main() -> None:
         default="auto",
         help="Dataset format (default: auto-detect)",
     )
-    run_p.add_argument("--samples", type=int, default=100, help="Number of samples (default: 100)")
+    run_p.add_argument(
+        "--samples", type=int, default=-1, help="Number of samples, -1 for all (default: -1)"
+    )
     run_p.add_argument(
         "--no-contrastive",
         action="store_true",
@@ -380,7 +394,9 @@ def main() -> None:
     )
     resp_p.add_argument("--model", required=True, help="HuggingFace model ID")
     resp_p.add_argument("--data", required=True, help="Path to .jsonl or .json dataset file")
-    resp_p.add_argument("--samples", type=int, default=100, help="Number of samples (default: 100)")
+    resp_p.add_argument(
+        "--samples", type=int, default=-1, help="Number of samples, -1 for all (default: -1)"
+    )
     resp_p.add_argument(
         "--question-key",
         default="question",
@@ -435,7 +451,7 @@ def main() -> None:
         help="Dataset format (default: auto-detect)",
     )
     transfer_p.add_argument(
-        "--samples", type=int, default=100, help="Number of samples (default: 100)"
+        "--samples", type=int, default=-1, help="Number of samples, -1 for all (default: -1)"
     )
     transfer_p.add_argument(
         "--output",
