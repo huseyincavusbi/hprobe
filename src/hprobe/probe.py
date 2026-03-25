@@ -599,6 +599,9 @@ class HProbe:
 
         out = {
             "saved_at": datetime.now(timezone.utc).isoformat(),
+            "model": getattr(self, "model_id", None),
+            "dataset": getattr(self, "dataset_name", None),
+            "n_samples": getattr(self, "n_samples_used", None),
             "fit": {
                 "n_h_neurons": self.n_neurons_,
                 "neuron_ratio_permille": self.neuron_ratio_,
