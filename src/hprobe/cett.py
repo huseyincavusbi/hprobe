@@ -274,7 +274,7 @@ def forward_cett_batch(
 
     Parameters
     ----------
-    batch_tokens : tokenizer output with batch_size > 1 (must be left-padded)
+    batch_tokens : tokenizer output with batch_size > 1 (must be right-padded)
     token_positions : last real token position per sample (index into padded seq)
 
     Returns
@@ -283,6 +283,10 @@ def forward_cett_batch(
     logits_matrix : (batch_size, vocab_size) float32
     """
     batch_size = batch_tokens["input_ids"].shape[0]
+    device = batch_tokens["input_ids"].device
+    batch_idx = torch.arange(batch_size, device=device)
+    token_pos_t = torch.tensor(token_positions, device=device)
+
     z_cache: Dict[int, torch.Tensor] = {}
     h_cache: Dict[int, torch.Tensor] = {}
     handles = []
@@ -292,8 +296,9 @@ def forward_cett_batch(
 
         def make_hook(idx: int):
             def hook(module, input, output):
-                z_cache[idx] = input[0].detach().float().cpu()
-                h_cache[idx] = output.detach().float().cpu()
+                # Slice to needed positions on GPU — avoids copying full (B, T, D) off-device
+                z_cache[idx] = input[0][batch_idx, token_pos_t].detach().float()  # (B, D)
+                h_cache[idx] = output[batch_idx, token_pos_t].detach().float()  # (B, D)
                 return output
 
             return hook
@@ -305,11 +310,7 @@ def forward_cett_batch(
         position_ids = (batch_tokens["attention_mask"].cumsum(dim=-1) - 1).clamp(min=0)
     else:
         seq_len = batch_tokens["input_ids"].shape[1]
-        position_ids = (
-            torch.arange(seq_len, device=batch_tokens["input_ids"].device)
-            .unsqueeze(0)
-            .expand(batch_size, -1)
-        )
+        position_ids = torch.arange(seq_len, device=device).unsqueeze(0).expand(batch_size, -1)
 
     try:
         with torch.no_grad():
@@ -318,23 +319,18 @@ def forward_cett_batch(
         for h in handles:
             h.remove()
 
-    logits_matrix = torch.stack(
-        [out.logits[i, token_positions[i], :].detach().float().cpu() for i in range(batch_size)]
-    )
+    logits_matrix = out.logits[batch_idx, token_pos_t].detach().float().cpu()  # (B, vocab)
 
-    cett_rows = []
-    for i in range(batch_size):
-        pos = token_positions[i]
-        cett_parts = []
-        for layer_idx in layers:
-            z = z_cache[layer_idx][i, pos, :]
-            h = h_cache[layer_idx][i, pos, :]
-            h_norm = torch.norm(h).item() + 1e-8
-            cett = (z * col_norms[layer_idx]) / h_norm
-            cett_parts.append(cett)
-        cett_rows.append(torch.cat(cett_parts, dim=0))
+    # Vectorized CETT on GPU: stack all layers then compute in one shot
+    z_all = torch.stack([z_cache[li] for li in layers], dim=0)  # (L, B, D)
+    h_all = torch.stack([h_cache[li] for li in layers], dim=0)  # (L, B, D)
+    col_norms_gpu = torch.stack([col_norms[li].to(device) for li in layers])  # (L, D)
 
-    return torch.stack(cett_rows), logits_matrix
+    h_norm = torch.norm(h_all, dim=-1, keepdim=True) + 1e-8  # (L, B, 1)
+    cett = (z_all * col_norms_gpu.unsqueeze(1)) / h_norm  # (L, B, D)
+    cett_matrix = cett.permute(1, 0, 2).reshape(batch_size, -1).cpu()  # (B, L*D)
+
+    return cett_matrix, logits_matrix
 
 
 def forward_cett_at_token_batch(
@@ -378,8 +374,9 @@ def forward_cett_at_token_batch(
 
         def make_hook(idx: int):
             def hook(module, input, output):
-                z_cache[idx] = input[0].detach().float().cpu()
-                h_cache[idx] = output.detach().float().cpu()
+                # Slice last position on GPU — avoids copying full (B, T, D) off-device
+                z_cache[idx] = input[0][:, -1, :].detach().float()  # (B, D)
+                h_cache[idx] = output[:, -1, :].detach().float()  # (B, D)
                 return output
 
             return hook
@@ -399,18 +396,16 @@ def forward_cett_at_token_batch(
         for h in handles:
             h.remove()
 
-    cett_rows = []
-    for i in range(batch_size):
-        cett_parts = []
-        for layer_idx in layers:
-            z = z_cache[layer_idx][i, -1, :]
-            h = h_cache[layer_idx][i, -1, :]
-            h_norm = torch.norm(h).item() + 1e-8
-            cett = (z * col_norms[layer_idx]) / h_norm
-            cett_parts.append(cett)
-        cett_rows.append(torch.cat(cett_parts, dim=0))
+    # Vectorized CETT on GPU
+    z_all = torch.stack([z_cache[li] for li in layers], dim=0)  # (L, B, D)
+    h_all = torch.stack([h_cache[li] for li in layers], dim=0)  # (L, B, D)
+    col_norms_gpu = torch.stack([col_norms[li].to(device) for li in layers])  # (L, D)
 
-    return torch.stack(cett_rows)
+    h_norm = torch.norm(h_all, dim=-1, keepdim=True) + 1e-8  # (L, B, 1)
+    cett = (z_all * col_norms_gpu.unsqueeze(1)) / h_norm  # (L, B, D)
+    cett_matrix = cett.permute(1, 0, 2).reshape(batch_size, -1).cpu()  # (B, L*D)
+
+    return cett_matrix
 
 
 def scale_h_neurons(
