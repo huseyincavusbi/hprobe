@@ -889,6 +889,129 @@ class HProbe:
         x_norm = (x_sel - self._col_mean) / (self._col_std + 1e-8)
         return float(self._clf.predict_proba(x_norm.reshape(1, -1))[0, 1])
 
+    def detect_batch(
+        self,
+        prompts: List[str],
+        answer_letters: Optional[List[str]] = None,
+        batch_size: Optional[int] = None,
+    ) -> List[float]:
+        """Estimate hallucination risk for a batch of prompts.
+
+        Batched version of :meth:`detect` — uses the same GPU-vectorized CETT
+        extraction as ``fit()``, so throughput scales with batch size.
+
+        Parameters
+        ----------
+        prompts : list of str
+            Fully formatted prompt strings including the answer cue.
+        answer_letters : list of str, optional
+            Predicted answer letter per prompt (e.g. ``["A", "C", "B"]``).
+            If provided, skips the first forward pass for the whole batch.
+            If None, the probe runs a batched forward pass to predict all letters.
+        batch_size : int, optional
+            Number of prompts per forward pass. Defaults to ``self.batch_size``.
+
+        Returns
+        -------
+        list of float
+            Hallucination risk score in ``[0, 1]`` for each prompt, in the same
+            order as ``prompts``.
+        """
+        if not self.is_fitted_:
+            raise RuntimeError(_NOT_FITTED_MSG)
+
+        bs = batch_size or self.batch_size
+        device = next(self.model.parameters()).device
+        orig_padding_side = self.tokenizer.padding_side
+        self.tokenizer.padding_side = "right"
+
+        all_scores: List[float] = []
+
+        try:
+            for start in range(0, len(prompts), bs):
+                batch_prompts = prompts[start : start + bs]
+                batch_letters = (
+                    answer_letters[start : start + bs] if answer_letters is not None else None
+                )
+
+                enc = self.tokenizer(
+                    batch_prompts,
+                    return_tensors="pt",
+                    padding=True,
+                    truncation=True,
+                    max_length=self.max_tokens,
+                ).to(device)
+
+                if "attention_mask" in enc:
+                    last_positions = (enc["attention_mask"].sum(dim=1) - 1).tolist()
+                else:
+                    last_positions = [enc["input_ids"].shape[1] - 1] * len(batch_prompts)
+
+                if self.contrastive:
+                    if batch_letters is None:
+                        _, logits_matrix = forward_cett_batch(
+                            self.model,
+                            enc,
+                            self._layers,
+                            self._col_norms,
+                            [int(p) for p in last_positions],
+                        )
+                        batch_letters = [
+                            self._predict_letter(logits_matrix[i])
+                            for i in range(len(batch_prompts))
+                        ]
+                    else:
+                        batch_letters = [lt.strip().upper() for lt in batch_letters]
+
+                    letter_ids = [self._letter_ids.get(lt) for lt in batch_letters]
+                    valid_idx = [i for i, lid in enumerate(letter_ids) if lid is not None]
+
+                    valid_enc: Dict[str, torch.Tensor] = {"input_ids": enc["input_ids"][valid_idx]}
+                    if "attention_mask" in enc:
+                        valid_enc["attention_mask"] = enc["attention_mask"][valid_idx]
+
+                    cett_matrix = forward_cett_at_token_batch(
+                        self.model,
+                        valid_enc,
+                        [letter_ids[i] for i in valid_idx],
+                        self._layers,
+                        self._col_norms,
+                    )
+
+                    # Map valid results back to original batch positions
+                    scores_batch = [float("nan")] * len(batch_prompts)
+                    for j, i in enumerate(valid_idx):
+                        x = np.nan_to_num(cett_matrix[j].numpy().astype(np.float32))
+                        x_norm = (x[self._top_k_idx] - self._col_mean) / (self._col_std + 1e-8)
+                        scores_batch[i] = float(
+                            self._clf.predict_proba(x_norm.reshape(1, -1))[0, 1]
+                        )
+                else:
+                    cett_matrix, _ = forward_cett_batch(
+                        self.model,
+                        enc,
+                        self._layers,
+                        self._col_norms,
+                        [int(p) for p in last_positions],
+                    )
+                    scores_batch = []
+                    for i in range(len(batch_prompts)):
+                        x = np.nan_to_num(cett_matrix[i].numpy().astype(np.float32))
+                        x_norm = (x[self._top_k_idx] - self._col_mean) / (self._col_std + 1e-8)
+                        scores_batch.append(
+                            float(self._clf.predict_proba(x_norm.reshape(1, -1))[0, 1])
+                        )
+
+                all_scores.extend(scores_batch)
+
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+
+        finally:
+            self.tokenizer.padding_side = orig_padding_side
+
+        return all_scores
+
     # ------------------------------------------------------------------
     # Prompt building
     # ------------------------------------------------------------------
