@@ -826,6 +826,69 @@ class HProbe:
         self.score_results_ = result
         return result
 
+    def detect(
+        self,
+        prompt: str,
+        answer_letter: Optional[str] = None,
+    ) -> float:
+        """Estimate hallucination risk for a single prompt (production inference).
+
+        Runs one or two forward passes on ``prompt`` and returns a risk score
+        using the fitted probe — no ground truth required.
+
+        Parameters
+        ----------
+        prompt : str
+            Fully formatted prompt string, including the answer cue
+            (e.g. the output of ``tokenizer.apply_chat_template(...)`` + ``"\\n\\nAnswer:"``).
+        answer_letter : str, optional
+            The letter the model already predicted (e.g. ``"A"``).
+            If provided, skips the first forward pass (faster — piggybacks on your
+            existing generation call). If None, the probe runs its own forward pass
+            to predict the letter.
+
+        Returns
+        -------
+        float
+            Hallucination risk score in ``[0, 1]``.
+            Higher → model more likely to be wrong / hallucinating.
+
+        Raises
+        ------
+        RuntimeError
+            If called before ``fit()``.
+        ValueError
+            If ``answer_letter`` is not a recognised MCQ letter (A–J).
+        """
+        if not self.is_fitted_:
+            raise RuntimeError(_NOT_FITTED_MSG)
+
+        tokens = self._tokenize(prompt)
+
+        if self.contrastive:
+            if answer_letter is None:
+                _, logits = forward_cett(self.model, tokens, self._layers, self._col_norms)
+                answer_letter = self._predict_letter(logits)
+            else:
+                answer_letter = answer_letter.strip().upper()
+
+            letter_token_id = self._letter_ids.get(answer_letter)
+            if letter_token_id is None:
+                raise ValueError(
+                    f"Unknown answer letter {answer_letter!r}. "
+                    f"Expected one of {list(self._letter_ids)}"
+                )
+            cett_vec = forward_cett_at_token(
+                self.model, tokens, letter_token_id, self._layers, self._col_norms
+            )
+        else:
+            cett_vec, _ = forward_cett(self.model, tokens, self._layers, self._col_norms)
+
+        x = np.nan_to_num(cett_vec.numpy().astype(np.float32))
+        x_sel = x[self._top_k_idx]
+        x_norm = (x_sel - self._col_mean) / (self._col_std + 1e-8)
+        return float(self._clf.predict_proba(x_norm.reshape(1, -1))[0, 1])
+
     # ------------------------------------------------------------------
     # Prompt building
     # ------------------------------------------------------------------
