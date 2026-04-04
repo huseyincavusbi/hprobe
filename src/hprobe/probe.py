@@ -227,7 +227,7 @@ class HProbe:
         # --- Phase 2: L1 probe ---
         self._clf = LogisticRegression(
             solver="liblinear",
-            penalty="l1",
+            l1_ratio=1,
             C=self.l1_C,
             class_weight="balanced",
             max_iter=1000,
@@ -434,7 +434,7 @@ class HProbe:
 
         self._clf = LogisticRegression(
             solver="liblinear",
-            penalty="l1",
+            l1_ratio=1,
             C=self.l1_C,
             class_weight="balanced",
             max_iter=1000,
@@ -499,7 +499,7 @@ class HProbe:
 
             clf_rand = LogisticRegression(
                 solver="liblinear",
-                penalty="l1",
+                l1_ratio=1,
                 C=self.l1_C,
                 class_weight="balanced",
                 max_iter=1000,
