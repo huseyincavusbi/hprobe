@@ -737,20 +737,20 @@ class HProbe:
             tokens = self._tokenize(prompt)
             try:
                 if self.contrastive:
-                    cett_vec, logits = forward_cett(
+                    cett_prompt, logits = forward_cett(
                         self.model, tokens, self._layers, self._col_norms
                     )
                     pred = self._predict_letter(logits)
                     letter_token_id = self._letter_ids.get(pred)
                     if letter_token_id is None:
                         continue
-                    cett_vec = forward_cett_at_token(
+                    cett_ans = forward_cett_at_token(
                         self.model, tokens, letter_token_id, self._layers, self._col_norms
                     )
                     label = 1 if pred != gt else 0
-                    X.append(cett_vec.numpy())
+                    X.append(cett_ans.numpy())
                     y.append(label)
-                    X.append(cett_vec.numpy())
+                    X.append(cett_prompt.numpy())
                     y.append(0)
                 else:
                     cett_vec, logits = forward_cett(
