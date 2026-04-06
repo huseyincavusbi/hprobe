@@ -65,10 +65,20 @@ class _Model(nn.Module):
         return out
 
 
+class _TokenizerOutput(dict):
+    """Dict subclass with .to() so detect_batch() can call tokenizer(...).to(device)."""
+
+    def to(self, device):
+        return {k: v.to(device) for k, v in self.items()}
+
+
 class _Tokenizer:
     """ASCII character-level tokenizer. encode('A') == [65]."""
 
     chat_template = None
+    padding_side = "right"
+    eos_token_id = 0
+    pad_token_id = 0
 
     def encode(self, text, add_special_tokens=False):
         return [ord(c) for c in text]
@@ -76,12 +86,23 @@ class _Tokenizer:
     def decode(self, ids):
         return "".join(chr(i) for i in ids)
 
-    def __call__(self, text, return_tensors=None, truncation=False, max_length=None):
+    def __call__(self, text, return_tensors=None, truncation=False, max_length=None, padding=False):
+        if isinstance(text, list):
+            all_ids = [[ord(c) for c in t] for t in text]
+            if max_length:
+                all_ids = [ids[:max_length] for ids in all_ids]
+            max_len = max(len(ids) for ids in all_ids)
+            padded = [ids + [0] * (max_len - len(ids)) for ids in all_ids]
+            masks = [[1] * len(ids) + [0] * (max_len - len(ids)) for ids in all_ids]
+            return _TokenizerOutput(
+                input_ids=torch.tensor(padded, dtype=torch.long),
+                attention_mask=torch.tensor(masks, dtype=torch.long),
+            )
         ids = [ord(c) for c in text]
         if max_length:
             ids = ids[:max_length]
         input_ids = torch.tensor([ids], dtype=torch.long)
-        return {"input_ids": input_ids, "attention_mask": torch.ones_like(input_ids)}
+        return _TokenizerOutput(input_ids=input_ids, attention_mask=torch.ones_like(input_ids))
 
 
 MODEL = _Model()
@@ -240,3 +261,123 @@ class TestSaveLoadTransfer:
             result = loaded.score_on(SAMPLES, options_key="options", answer_key="answer")
             assert "auroc" in result
             assert "balanced_accuracy" in result
+
+
+class TestThreshold:
+    def test_default_before_score(self):
+        p = HProbe(MODEL, TOK, l1_C=0.5)
+        assert p.threshold_ == 0.5
+
+    def test_set_after_score(self):
+        # _PROBE already had score() called during save/load tests above; call again to be sure
+        _PROBE.score()
+        assert 0.0 <= _PROBE.threshold_ <= 1.0
+
+    def test_threshold_in_score_results(self):
+        result = _PROBE.score()
+        assert "threshold" in result
+        assert result["threshold"] == _PROBE.threshold_
+
+    def test_threshold_persisted_in_save_load(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = str(Path(tmp) / "probe")
+            _PROBE.score()
+            expected = _PROBE.threshold_
+            _PROBE.save(base)
+            loaded = HProbe.load(base, MODEL, TOK)
+            assert loaded.threshold_ == expected
+
+
+class TestDetect:
+    def test_returns_float_in_range(self):
+        prompt = "Q0? Options: A) alpha B) beta C) gamma D) delta\n\nAnswer:"
+        score = _PROBE.detect(prompt)
+        assert isinstance(score, float)
+        assert 0.0 <= score <= 1.0
+
+    def test_raises_if_not_fitted(self):
+        with pytest.raises(RuntimeError):
+            HProbe(MODEL, TOK).detect("some prompt")
+
+    def test_with_answer_letter_provided(self):
+        prompt = "Q0? Options: A) alpha B) beta\n\nAnswer:"
+        score = _PROBE.detect(prompt, answer_letter="A")
+        assert 0.0 <= score <= 1.0
+
+    def test_answer_letter_case_normalised(self):
+        prompt = "Q0? Options: A) alpha B) beta\n\nAnswer:"
+        score_lower = _PROBE.detect(prompt, answer_letter="a")
+        score_upper = _PROBE.detect(prompt, answer_letter="A")
+        assert abs(score_lower - score_upper) < 1e-6
+
+    def test_invalid_answer_letter_raises(self):
+        probe = HProbe(MODEL, TOK, l1_C=0.5, contrastive=True)
+        probe.fit(SAMPLES, options_key="options", answer_key="answer")
+        with pytest.raises(ValueError):
+            probe.detect("some prompt", answer_letter="Z")
+
+    def test_non_contrastive_detect(self):
+        p = HProbe(MODEL, TOK, l1_C=0.5, contrastive=False)
+        p.fit(SAMPLES, options_key="options", answer_key="answer")
+        score = p.detect("Q0? Options: A) alpha B) beta\n\nAnswer:")
+        assert 0.0 <= score <= 1.0
+
+
+class TestDetectBatch:
+    _PROMPT = "Q{i}? Options: A) alpha B) beta C) gamma D) delta\n\nAnswer:"
+
+    def _prompts(self, n=4):
+        return [self._PROMPT.format(i=i) for i in range(n)]
+
+    def test_returns_list_of_correct_length(self):
+        prompts = self._prompts(4)
+        scores = _PROBE.detect_batch(prompts, batch_size=2)
+        assert len(scores) == 4
+
+    def test_scores_in_range(self):
+        scores = _PROBE.detect_batch(self._prompts(4))
+        assert all(0.0 <= s <= 1.0 for s in scores)
+
+    def test_raises_if_not_fitted(self):
+        with pytest.raises(RuntimeError):
+            HProbe(MODEL, TOK).detect_batch(["prompt"])
+
+    def test_with_answer_letters_provided(self):
+        prompts = self._prompts(4)
+        letters = ["A", "B", "C", "D"]
+        scores = _PROBE.detect_batch(prompts, answer_letters=letters, batch_size=2)
+        assert len(scores) == 4
+        assert all(0.0 <= s <= 1.0 for s in scores)
+
+    def test_single_prompt_matches_detect(self):
+        prompt = self._prompts(1)[0]
+        batch_score = _PROBE.detect_batch([prompt], batch_size=1)[0]
+        single_score = _PROBE.detect(prompt)
+        # Same forward pass logic — scores should be identical
+        assert abs(batch_score - single_score) < 1e-5
+
+    def test_non_contrastive_batch(self):
+        p = HProbe(MODEL, TOK, l1_C=0.5, contrastive=False)
+        p.fit(SAMPLES, options_key="options", answer_key="answer")
+        scores = p.detect_batch(self._prompts(4), batch_size=2)
+        assert len(scores) == 4
+        assert all(0.0 <= s <= 1.0 for s in scores)
+
+
+class TestConsistencyFilter:
+    def test_default_n_consistency_is_1(self):
+        assert HProbe(MODEL, TOK).n_consistency == 1
+
+    def test_fit_with_n_consistency(self):
+        p = HProbe(MODEL, TOK, l1_C=0.5, n_consistency=3)
+        p.fit(SAMPLES, options_key="options", answer_key="answer")
+        assert p.is_fitted_
+
+    def test_n_consistency_persisted_in_save_load(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = str(Path(tmp) / "probe")
+            p = HProbe(MODEL, TOK, l1_C=0.5, n_consistency=5)
+            p.fit(SAMPLES, options_key="options", answer_key="answer")
+            p.save(base)
+            loaded = HProbe.load(base, MODEL, TOK)
+            assert loaded.n_consistency == 5
