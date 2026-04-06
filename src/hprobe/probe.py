@@ -9,7 +9,7 @@ from typing import Callable, Dict, List, Optional, Tuple
 import numpy as np
 import torch
 from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import balanced_accuracy_score, roc_auc_score
+from sklearn.metrics import balanced_accuracy_score, roc_auc_score, roc_curve
 from sklearn.model_selection import train_test_split
 from tqdm import tqdm
 
@@ -77,6 +77,7 @@ class HProbe:
         seed: int = 42,
         max_tokens: int = 1024,
         batch_size: int = 1,
+        n_consistency: int = 1,
     ):
         self.model = model
         self.tokenizer = tokenizer
@@ -87,6 +88,7 @@ class HProbe:
         self.validation_split = validation_split
         self.seed = seed
         self.max_tokens = max_tokens
+        self.n_consistency = n_consistency
 
         # Set after fit()
         self.h_neurons_: List[Tuple[int, int]] = []
@@ -94,6 +96,7 @@ class HProbe:
         self.neuron_ratio_: float = 0.0
         self.layer_distribution_: Dict[int, int] = {}
         self.accuracy_: float = 0.0
+        self.threshold_: float = 0.5
         self.is_fitted_: bool = False
 
         # Internal state
@@ -484,6 +487,9 @@ class HProbe:
         try:
             scores = self._clf.predict_proba(X_val)[:, 1]
             auroc = roc_auc_score(y_val, scores)
+            fpr, tpr, thresholds = roc_curve(y_val, scores)
+            J = tpr - fpr
+            self.threshold_ = float(thresholds[int(J.argmax())])
         except Exception:
             auroc = None
 
@@ -528,6 +534,7 @@ class HProbe:
             "auroc_gap": gap,
             "n_h_neurons": self.n_neurons_,
             "neuron_ratio_permille": self.neuron_ratio_,
+            "threshold": self.threshold_,
         }
         return self.score_results_
 
@@ -637,6 +644,8 @@ class HProbe:
             "seed": self.seed,
             "max_tokens": self.max_tokens,
             "answer_cue": self._answer_cue,
+            "threshold": self.threshold_,
+            "n_consistency": self.n_consistency,
         }
         pkl_path.write_bytes(pickle.dumps(clf_state))
 
@@ -687,6 +696,8 @@ class HProbe:
         probe._intermediate_dim = state["intermediate_dim"]
         probe._n_features = state["n_features"]
         probe._answer_cue = state["answer_cue"]
+        probe.threshold_ = state.get("threshold", 0.5)
+        probe.n_consistency = state.get("n_consistency", 1)
         probe.n_neurons_ = len(state["h_neurons"])
         probe.layer_distribution_ = {}
         for layer, _ in state["h_neurons"]:
@@ -1112,6 +1123,27 @@ class HProbe:
         """Pick the MCQ letter with the highest logit."""
         return max(self._letter_ids.items(), key=lambda kv: logits[kv[1]].item())[0]
 
+    def _consistency_predict(self, tokens: Dict[str, torch.Tensor], n: int) -> Optional[str]:
+        """Sample n predictions from the letter distribution and return the agreed letter.
+
+        Runs a single forward pass, restricts logits to MCQ letter tokens, then
+        draws n samples with temperature=1.0. Returns the agreed letter if all n
+        samples match, else None (inconsistent → skip the sample).
+        """
+        letters = list(self._letter_ids.keys())
+        token_ids = torch.tensor(list(self._letter_ids.values()))
+
+        with torch.no_grad():
+            out = self.model(**tokens)
+
+        logits = out.logits[0, -1, :].float().cpu()
+        letter_logits = logits[token_ids]  # (n_letters,) — temperature=1.0 (no scaling)
+        probs = torch.softmax(letter_logits, dim=0)
+
+        indices = torch.multinomial(probs, num_samples=n, replacement=True).tolist()
+        preds = [letters[i] for i in indices]
+        return preds[0] if len(set(preds)) == 1 else None
+
     def _tokenize(self, prompt: str) -> Dict[str, torch.Tensor]:
         device = next(self.model.parameters()).device
         tokens = self.tokenizer(
@@ -1279,23 +1311,35 @@ class HProbe:
 
             prompt = self._build_prompt(sample, question_key, options_key, prompt_fn, answer_cue)
 
-            if self.batch_size > 1:
+            if self.batch_size > 1 and self.n_consistency <= 1:
                 batch_buf.append((sample, gt, prompt))
                 if len(batch_buf) >= self.batch_size:
                     _flush_batch(batch_buf)
                     batch_buf = []
                 continue
 
-            # --- single-sample path (batch_size=1) ---
+            # --- single-sample path ---
             tokens = self._tokenize(prompt)
 
-            try:
-                cett_vec, logits = forward_cett(self.model, tokens, self._layers, self._col_norms)
-            except Exception:
-                skipped += 1
-                continue
-
-            pred = self._predict_letter(logits)
+            if self.n_consistency > 1:
+                pred = self._consistency_predict(tokens, self.n_consistency)
+                if pred is None:
+                    skipped += 1
+                    continue
+                try:
+                    cett_vec, _ = forward_cett(self.model, tokens, self._layers, self._col_norms)
+                except Exception:
+                    skipped += 1
+                    continue
+            else:
+                try:
+                    cett_vec, logits = forward_cett(
+                        self.model, tokens, self._layers, self._col_norms
+                    )
+                except Exception:
+                    skipped += 1
+                    continue
+                pred = self._predict_letter(logits)
             is_correct = pred == gt
 
             sample_pos = len(valid_prompts)
