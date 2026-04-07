@@ -4,7 +4,7 @@
 
 ```python
 from transformers import AutoModelForCausalLM, AutoTokenizer
-from hprobe import HProbe
+from hprobes import HProbe
 
 model = AutoModelForCausalLM.from_pretrained(
     "google/gemma-3-4b-it",
@@ -62,10 +62,10 @@ probe.score_on(new_samples, options_key="choices", answer_key="answer")
 
 ```bash
 # Fit and score on an MCQ dataset
-hprobe run --model google/gemma-3-4b-it --data dataset.jsonl --samples 500
+hprobes run --model google/gemma-3-4b-it --data dataset.jsonl --samples 500
 
 # Transfer a saved probe to a different model
-hprobe transfer --probe results/probe --model google/gemma-3-4b --data dataset.jsonl
+hprobes transfer --probe results/probe --model google/gemma-3-4b --data dataset.jsonl
 ```
 
 ## Key Parameters

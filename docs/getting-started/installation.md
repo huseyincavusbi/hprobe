@@ -28,8 +28,8 @@ uv sync --dev
 
 ## Optional: CLI
 
-The `hprobe` CLI is included automatically:
+The `hprobes` CLI is included automatically:
 
 ```bash
-hprobe --help
+hprobes --help
 ```

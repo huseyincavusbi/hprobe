@@ -1,3 +1,3 @@
 # HProbe
 
-::: hprobe.HProbe
+::: hprobes.HProbe

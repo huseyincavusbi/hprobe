@@ -1,11 +1,11 @@
-"""Unit tests for hprobe CLI helpers"""
+"""Unit tests for hprobes CLI helpers"""
 
 import json
 import tempfile
 
 import pytest
 
-from hprobe.cli import detect_format, format_keys, load_samples
+from hprobes.cli import detect_format, format_keys, load_samples
 
 
 _MMLU_SAMPLE = {
@@ -124,9 +124,9 @@ class TestCLIArgParsing:
         import sys
 
         old = sys.argv
-        sys.argv = ["hprobe"] + argv
+        sys.argv = ["hprobes"] + argv
         try:
-            from hprobe.cli import _add_common_model_args, _add_common_probe_args
+            from hprobes.cli import _add_common_model_args, _add_common_probe_args
 
             parser = argparse.ArgumentParser()
             subparsers = parser.add_subparsers(dest="command")

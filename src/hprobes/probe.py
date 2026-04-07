@@ -169,7 +169,7 @@ class HProbe:
         top_k = min(5000, self._n_features)
 
         print(
-            f"[hprobe] Layers: {len(self._layers)}  |  "
+            f"[hprobes] Layers: {len(self._layers)}  |  "
             f"Features: {self._n_features:,}  |  Contrastive: {self.contrastive}"
         )
 
@@ -183,7 +183,7 @@ class HProbe:
         n_valid = len(valid_prompts)
         self.accuracy_ = sum(p["is_correct"] for p in per_sample) / n_valid if n_valid > 0 else 0.0
 
-        print(f"[hprobe] Valid: {n_valid}  |  Accuracy: {self.accuracy_:.3f}")
+        print(f"[hprobes] Valid: {n_valid}  |  Accuracy: {self.accuracy_:.3f}")
         if n_valid < 20:
             print(f"  WARNING: only {n_valid} valid samples — probe may be unreliable.")
 
@@ -257,10 +257,10 @@ class HProbe:
 
         self.is_fitted_ = True
 
-        print(f"[hprobe] H-Neurons: {self.n_neurons_}  |  Ratio: {self.neuron_ratio_:.3f}‰")
+        print(f"[hprobes] H-Neurons: {self.n_neurons_}  |  Ratio: {self.neuron_ratio_:.3f}‰")
         if self.layer_distribution_:
             top = sorted(self.layer_distribution_.items(), key=lambda x: x[1], reverse=True)[:5]
-            print(f"[hprobe] Top layers: {top}")
+            print(f"[hprobes] Top layers: {top}")
 
         return self
 
@@ -307,7 +307,7 @@ class HProbe:
         top_k = min(5000, self._n_features)
 
         print(
-            f"[hprobe] Layers: {len(self._layers)}  |  Features: {self._n_features:,}  |  Mode: 3-vs-1"
+            f"[hprobes] Layers: {len(self._layers)}  |  Features: {self._n_features:,}  |  Mode: 3-vs-1"
         )
 
         self._welford_n = 0
@@ -392,7 +392,7 @@ class HProbe:
                 torch.cuda.empty_cache()
 
         if skipped:
-            print(f"[hprobe] Skipped: {skipped}")
+            print(f"[hprobes] Skipped: {skipped}")
 
         # Combine rows
         cett_all = cett_ans + cett_other
@@ -401,7 +401,7 @@ class HProbe:
 
         n_valid = len(valid_prompts)
         self.accuracy_ = sum(p["is_correct"] for p in per_sample) / n_valid if n_valid > 0 else 0.0
-        print(f"[hprobe] Valid: {n_valid}  |  Accuracy: {self.accuracy_:.3f}")
+        print(f"[hprobes] Valid: {n_valid}  |  Accuracy: {self.accuracy_:.3f}")
 
         # Variance pre-selection
         feature_var = self._welford_M2 / max(self._welford_n - 1, 1)
@@ -462,10 +462,10 @@ class HProbe:
             self.layer_distribution_[li] = self.layer_distribution_.get(li, 0) + 1
         self.is_fitted_ = True
 
-        print(f"[hprobe] H-Neurons: {self.n_neurons_}  |  Ratio: {self.neuron_ratio_:.3f}‰")
+        print(f"[hprobes] H-Neurons: {self.n_neurons_}  |  Ratio: {self.neuron_ratio_:.3f}‰")
         if self.layer_distribution_:
             top = sorted(self.layer_distribution_.items(), key=lambda x: x[1], reverse=True)[:5]
-            print(f"[hprobe] Top layers: {top}")
+            print(f"[hprobes] Top layers: {top}")
 
         return self
 
@@ -524,7 +524,7 @@ class HProbe:
         gap = (auroc - rand_auroc) if (auroc is not None and rand_auroc is not None) else None
 
         if gap is not None:
-            print(f"[hprobe] AUROC: {auroc:.3f}  |  Random: {rand_auroc:.3f}  |  Gap: {gap:+.3f}")
+            print(f"[hprobes] AUROC: {auroc:.3f}  |  Random: {rand_auroc:.3f}  |  Gap: {gap:+.3f}")
 
         self.score_results_ = {
             "auroc": auroc,
@@ -555,7 +555,7 @@ class HProbe:
         if not self.is_fitted_:
             raise RuntimeError(_NOT_FITTED_MSG)
         if not self.h_neurons_:
-            print("[hprobe] No H-Neurons found — skipping causal validation.")
+            print("[hprobes] No H-Neurons found — skipping causal validation.")
             return {}
 
         alphas = alphas or [0.0, 0.5, 1.0, 1.5, 2.0]
@@ -825,7 +825,7 @@ class HProbe:
         gap = (auroc - rand_auroc) if (auroc is not None and rand_auroc is not None) else None
         rand_str = f"{rand_auroc:.3f}" if rand_auroc is not None else "n/a"
         gap_str = f"{gap:+.3f}" if gap is not None else "n/a"
-        print(f"[hprobe transfer] AUROC: {auroc:.3f}  |  Random: {rand_str}  |  Gap: {gap_str}")
+        print(f"[hprobes transfer] AUROC: {auroc:.3f}  |  Random: {rand_str}  |  Gap: {gap_str}")
 
         result = {
             "auroc": auroc,
@@ -1404,7 +1404,7 @@ class HProbe:
             self.tokenizer.padding_side = orig_padding_side
 
         if skipped:
-            print(f"[hprobe] Skipped: {skipped}")
+            print(f"[hprobes] Skipped: {skipped}")
 
         return cett_raw, train_labels, row_to_sample, valid_prompts, valid_gt, per_sample
 

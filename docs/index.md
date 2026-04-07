@@ -23,7 +23,7 @@ uv add hprobes
 
 ```python
 from transformers import AutoModelForCausalLM, AutoTokenizer
-from hprobe import HProbe
+from hprobes import HProbe
 
 model = AutoModelForCausalLM.from_pretrained("google/gemma-3-4b-it", torch_dtype="auto", device_map="auto")
 tokenizer = AutoTokenizer.from_pretrained("google/gemma-3-4b-it")

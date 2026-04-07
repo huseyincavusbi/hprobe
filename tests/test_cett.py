@@ -1,10 +1,10 @@
-"""Tests for hprobe.cett — CETT metric and hook utilities."""
+"""Tests for hprobes.cett — CETT metric and hook utilities."""
 
 import pytest
 import torch
 import torch.nn as nn
 
-from hprobe.cett import (
+from hprobes.cett import (
     _get_transformer_layers,
     available_layers,
     forward_cett,

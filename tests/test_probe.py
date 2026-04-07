@@ -1,4 +1,4 @@
-"""Tests for hprobe.probe — HProbe class."""
+"""Tests for hprobes.probe — HProbe class."""
 
 import tempfile
 from pathlib import Path
@@ -8,7 +8,7 @@ import pytest
 import torch
 import torch.nn as nn
 
-from hprobe import HProbe
+from hprobes import HProbe
 
 # ---------------------------------------------------------------------------
 # Minimal mock model + tokenizer

@@ -10,16 +10,16 @@ Based on [arXiv:2512.01797](https://arxiv.org/abs/2512.01797).
 ## Install
 
 ```bash
-pip install hprobe
+pip install hprobes
 # or
-uv add hprobe
+uv add hprobes
 ```
 
 ## Quickstart
 
 ```python
 from transformers import AutoModelForCausalLM, AutoTokenizer
-from hprobe import HProbe
+from hprobes import HProbe
 
 model = AutoModelForCausalLM.from_pretrained("google/gemma-3-4b-it", torch_dtype="auto", device_map="auto")
 tokenizer = AutoTokenizer.from_pretrained("google/gemma-3-4b-it")
@@ -40,13 +40,13 @@ probe.causal_validate()
 
 ```bash
 # Fit and score on an MCQ dataset
-hprobe run --model google/gemma-3-4b-it --data dataset.jsonl --samples 500
+hprobes run --model google/gemma-3-4b-it --data dataset.jsonl --samples 500
 
 # Transfer: score a saved probe on a different model
-hprobe transfer --probe results/probe --model google/gemma-3-4b --data dataset.jsonl
+hprobes transfer --probe results/probe --model google/gemma-3-4b --data dataset.jsonl
 
 # Fit from pre-generated responses with judge labels
-hprobe responses --model google/gemma-3-4b-it --data responses.jsonl
+hprobes responses --model google/gemma-3-4b-it --data responses.jsonl
 ```
 
 ## Supported formats
