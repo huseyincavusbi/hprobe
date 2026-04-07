@@ -26,7 +26,15 @@ source .venv/bin/activate
 uv sync --dev
 ```
 
-## Optional: CLI
+
+## Verification
+
+```python
+from hprobes import HProbe
+print("hprobes imported successfully")
+```
+
+## CLI
 
 The `hprobes` CLI is included automatically:
 

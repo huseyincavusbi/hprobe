@@ -40,9 +40,15 @@ nav:
   - Home: index.md
   - Getting Started:
     - Installation: getting-started/installation.md
-    - Quickstart: getting-started/quickstart.md
+    - Quick Start: getting-started/quickstart.md
+  - User Guide:
+    - How It Works: guide/how-it-works.md
+    - Dataset Formats: guide/datasets.md
+    - Production Scoring: guide/production.md
+    - CLI Reference: guide/cli.md
   - API Reference:
     - HProbe: api/probe.md
+    - CETT Functions: api/cett.md
 
 markdown_extensions:
   - pymdownx.highlight:
