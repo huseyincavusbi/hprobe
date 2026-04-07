@@ -34,10 +34,10 @@ dev = [
 ]
 
 [project.scripts]
-hprobe = "hprobe.cli:main"
+hprobes = "hprobes.cli:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/hprobe"]
+packages = ["src/hprobes"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

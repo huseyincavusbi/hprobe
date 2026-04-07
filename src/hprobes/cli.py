@@ -1,4 +1,4 @@
-"""hprobe CLI — run hallucination neuron discovery from the terminal."""
+"""hprobes CLI — run hallucination neuron discovery from the terminal."""
 
 import argparse
 import json
@@ -135,11 +135,11 @@ def _print_score(results):
 
 
 def cmd_run(args: argparse.Namespace) -> None:
-    from hprobe import HProbe, __version__
+    from hprobes import HProbe, __version__
 
     sep = "─" * 68
     print(
-        f"\nhprobe v{__version__}  |  model: {args.model}  |  samples: {'all' if args.samples == -1 else args.samples}"
+        f"\nhprobes v{__version__}  |  model: {args.model}  |  samples: {'all' if args.samples == -1 else args.samples}"
     )
     print(sep)
 
@@ -201,11 +201,11 @@ def cmd_run(args: argparse.Namespace) -> None:
 
 
 def cmd_responses(args: argparse.Namespace) -> None:
-    from hprobe import HProbe, __version__
+    from hprobes import HProbe, __version__
 
     sep = "─" * 68
     print(
-        f"\nhprobe v{__version__}  |  model: {args.model}  |  samples: {args.samples}  |  mode: responses"
+        f"\nhprobes v{__version__}  |  model: {args.model}  |  samples: {args.samples}  |  mode: responses"
     )
     print(sep)
 
@@ -272,10 +272,10 @@ def cmd_responses(args: argparse.Namespace) -> None:
 
 
 def cmd_transfer(args: argparse.Namespace) -> None:
-    from hprobe import HProbe, __version__
+    from hprobes import HProbe, __version__
 
     sep = "─" * 68
-    print(f"\nhprobe v{__version__}  |  transfer: {args.probe} → {args.model}")
+    print(f"\nhprobes v{__version__}  |  transfer: {args.probe} → {args.model}")
     print(sep)
 
     samples = load_samples(args.data, args.samples)
@@ -360,16 +360,16 @@ def _add_common_probe_args(p):
 
 
 def main() -> None:
-    from hprobe import __version__
+    from hprobes import __version__
 
     parser = argparse.ArgumentParser(
-        prog="hprobe",
+        prog="hprobes",
         description="Hallucination neuron probe — discover and causally validate H-Neurons",
     )
-    parser.add_argument("--version", action="version", version=f"hprobe {__version__}")
+    parser.add_argument("--version", action="version", version=f"hprobes {__version__}")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    # ── hprobe run ────────────────────────────────────────────────────────────
+    # ── hprobes run ────────────────────────────────────────────────────────────
     run_p = subparsers.add_parser("run", help="Fit, score, and causal-validate on an MCQ dataset")
     run_p.add_argument("--model", required=True, help="HuggingFace model ID")
     run_p.add_argument("--data", required=True, help="Path to .jsonl or .json dataset file")
@@ -396,7 +396,7 @@ def main() -> None:
     _add_common_model_args(run_p)
     _add_common_probe_args(run_p)
 
-    # ── hprobe responses ──────────────────────────────────────────────────────
+    # ── hprobes responses ──────────────────────────────────────────────────────
     resp_p = subparsers.add_parser(
         "responses", help="Fit from pre-generated responses (open-ended / free-text)"
     )
@@ -443,7 +443,7 @@ def main() -> None:
     _add_common_model_args(resp_p)
     _add_common_probe_args(resp_p)
 
-    # ── hprobe transfer ───────────────────────────────────────────────────────
+    # ── hprobes transfer ───────────────────────────────────────────────────────
     transfer_p = subparsers.add_parser(
         "transfer", help="Score a saved probe on a different model (transfer experiment)"
     )
