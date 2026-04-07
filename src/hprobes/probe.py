@@ -477,7 +477,7 @@ class HProbe:
         dict with keys:
             auroc, balanced_accuracy,
             random_baseline_auroc, random_baseline_balanced_accuracy,
-            auroc_gap, n_h_neurons, neuron_ratio_permille
+            auroc_gap, n_h_neurons, neuron_ratio_permille, threshold
         """
         if not self.is_fitted_:
             raise RuntimeError(_NOT_FITTED_MSG)
@@ -810,6 +810,7 @@ class HProbe:
             )
             clf_rand = LogisticRegression(
                 solver="liblinear",
+                l1_ratio=1,
                 C=self.l1_C,
                 class_weight="balanced",
                 max_iter=1000,
