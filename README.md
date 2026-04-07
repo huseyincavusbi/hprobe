@@ -1,4 +1,7 @@
-# hprobe
+# hprobes
+
+[![Docs](https://img.shields.io/badge/docs-github.io-blue)](https://huseyincavusbi.github.io/hprobes)
+[![DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/huseyincavusbi/hprobes)
 
 Discover and causally validate hallucination-associated FFN neurons (H-Neurons) in transformer LLMs.
 
