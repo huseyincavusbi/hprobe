@@ -1,5 +1,6 @@
 """HProbe — toolkit for H-Neuron discovery and causal validation."""
 
+import logging
 import json
 from datetime import datetime, timezone
 from pathlib import Path
@@ -363,7 +364,8 @@ class HProbe:
                     self._col_norms,
                     aggregation,
                 )
-            except Exception:
+            except (ValueError, KeyError, RuntimeError, IndexError, TypeError) as e:
+                logging.warning(f"Error: {e}")
                 skipped += 1
                 continue
 
@@ -385,7 +387,8 @@ class HProbe:
                 cett_other.append(oth)
                 labels_other.append(0)  # always negative
                 self._welford_update(oth)
-            except Exception:
+            except (ValueError, KeyError, RuntimeError, IndexError, TypeError) as e:
+                logging.warning(f"Error: {e}")
                 pass
 
             if torch.cuda.is_available():
@@ -490,7 +493,8 @@ class HProbe:
             fpr, tpr, thresholds = roc_curve(y_val, scores)
             J = tpr - fpr
             self.threshold_ = float(thresholds[int(J.argmax())])
-        except Exception:
+        except (ValueError, KeyError, RuntimeError, IndexError, TypeError) as e:
+            logging.warning(f"Error: {e}")
             auroc = None
 
         preds = self._clf.predict(X_val)
@@ -516,7 +520,8 @@ class HProbe:
             try:
                 rand_scores = clf_rand.predict_proba(X_val[:, rand_idx])[:, 1]
                 rand_auroc = roc_auc_score(y_val, rand_scores)
-            except Exception:
+            except (ValueError, KeyError, RuntimeError, IndexError, TypeError) as e:
+                logging.warning(f"Error: {e}")
                 pass
             rand_preds = clf_rand.predict(X_val[:, rand_idx])
             rand_bal_acc = balanced_accuracy_score(y_val, rand_preds)
@@ -572,7 +577,8 @@ class HProbe:
                     pred = self._predict_letter(logits)
                     correct += int(pred == gt)
                     total += 1
-                except Exception:
+                except (ValueError, KeyError, RuntimeError, IndexError, TypeError) as e:
+                    logging.warning(f"Error: {e}")
                     continue
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
@@ -812,7 +818,8 @@ class HProbe:
                     label = 0 if pred == gt else 1
                     X.append(cett_vec.numpy())
                     y.append(label)
-            except Exception:
+            except (ValueError, KeyError, RuntimeError, IndexError, TypeError) as e:
+                logging.warning(f"Error: {e}")
                 continue
 
         if not X:
@@ -835,7 +842,8 @@ class HProbe:
         try:
             scores = self._clf.predict_proba(X_norm)[:, 1]
             auroc = roc_auc_score(y_arr, scores)
-        except Exception:
+        except (ValueError, KeyError, RuntimeError, IndexError, TypeError) as e:
+            logging.warning(f"Error: {e}")
             auroc = None
 
         preds = self._clf.predict(X_norm)
@@ -861,7 +869,8 @@ class HProbe:
                 clf_rand.fit(X_norm[: len(X_norm) // 2, rand_idx], y_arr[: len(y_arr) // 2])
                 rand_scores = clf_rand.predict_proba(X_norm[len(X_norm) // 2 :, rand_idx])[:, 1]
                 rand_auroc = roc_auc_score(y_arr[len(y_arr) // 2 :], rand_scores)
-            except Exception:
+            except (ValueError, KeyError, RuntimeError, IndexError, TypeError) as e:
+                logging.warning(f"Error: {e}")
                 pass
 
         gap = (auroc - rand_auroc) if (auroc is not None and rand_auroc is not None) else None
@@ -1092,7 +1101,15 @@ class HProbe:
 
                 try:
                     opts = ast.literal_eval(opts)
-                except Exception:
+                except (
+                    ValueError,
+                    KeyError,
+                    RuntimeError,
+                    IndexError,
+                    TypeError,
+                    SyntaxError,
+                ) as e:
+                    logging.warning(f"Error evaluating ast literal: {e}")
                     opts = {}
             if isinstance(opts, list):
                 # HuggingFace datasets like MMLU use a list of choice texts
@@ -1266,7 +1283,8 @@ class HProbe:
                     self._col_norms,
                     [int(p) for p in last_positions],
                 )
-            except Exception:
+            except (ValueError, KeyError, RuntimeError, IndexError, TypeError) as e:
+                logging.warning(f"Error: {e}")
                 skipped += len(buf)
                 return
 
@@ -1294,7 +1312,8 @@ class HProbe:
                         self._layers,
                         self._col_norms,
                     )
-                except Exception:
+                except (ValueError, KeyError, RuntimeError, IndexError, TypeError) as e:
+                    logging.warning(f"Error: {e}")
                     skipped += len(buf)
                     return
 
@@ -1370,7 +1389,8 @@ class HProbe:
                     continue
                 try:
                     cett_vec, _ = forward_cett(self.model, tokens, self._layers, self._col_norms)
-                except Exception:
+                except (ValueError, KeyError, RuntimeError, IndexError, TypeError) as e:
+                    logging.warning(f"Error: {e}")
                     skipped += 1
                     continue
             else:
@@ -1378,7 +1398,8 @@ class HProbe:
                     cett_vec, logits = forward_cett(
                         self.model, tokens, self._layers, self._col_norms
                     )
-                except Exception:
+                except (ValueError, KeyError, RuntimeError, IndexError, TypeError) as e:
+                    logging.warning(f"Error: {e}")
                     skipped += 1
                     continue
                 pred = self._predict_letter(logits)
@@ -1407,7 +1428,8 @@ class HProbe:
                     cett_ans_vec = forward_cett_at_token(
                         self.model, tokens, letter_token_id, self._layers, self._col_norms
                     )
-                except Exception:
+                except (ValueError, KeyError, RuntimeError, IndexError, TypeError) as e:
+                    logging.warning(f"Error: {e}")
                     valid_prompts.pop()
                     valid_gt.pop()
                     per_sample.pop()
