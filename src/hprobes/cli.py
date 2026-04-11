@@ -110,11 +110,22 @@ def _load_model(args):
         "bfloat16": torch.bfloat16,
         "float32": torch.float32,
     }
-    tokenizer = AutoTokenizer.from_pretrained(args.model)
+
+    if args.trust_remote_code:
+        import warnings
+
+        warnings.warn(
+            "trust_remote_code is set to True. This will execute code downloaded from the "
+            "Hugging Face Hub. Ensure you trust the repository before proceeding!",
+            UserWarning,
+        )
+
+    tokenizer = AutoTokenizer.from_pretrained(args.model, trust_remote_code=args.trust_remote_code)
     model = AutoModelForCausalLM.from_pretrained(
         args.model,
         dtype=dtype_map[args.dtype],
         device_map=args.device,
+        trust_remote_code=args.trust_remote_code,
     )
     model.eval()
     return tokenizer, model
@@ -304,13 +315,18 @@ def cmd_transfer(args: argparse.Namespace) -> None:
 
 
 def _add_common_model_args(p):
-    """Add --device and --dtype to a subparser."""
+    """Add --device, --dtype, and --trust-remote-code to a subparser."""
     p.add_argument("--device", default="auto", help="Device: auto, cpu, mps, cuda (default: auto)")
     p.add_argument(
         "--dtype",
         choices=["auto", "float16", "bfloat16", "float32"],
         default="auto",
         help="Model dtype (default: auto)",
+    )
+    p.add_argument(
+        "--trust-remote-code",
+        action="store_true",
+        help="Trust remote code on Hugging Face Hub (default: False)",
     )
 
 
