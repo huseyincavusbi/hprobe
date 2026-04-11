@@ -237,7 +237,7 @@ class TestSaveLoadTransfer:
             _PROBE.score()
             saved = _PROBE.save(base)
             assert Path(base).with_suffix(".json").exists()
-            assert Path(base).with_suffix(".pkl").exists()
+            assert Path(base).with_suffix(".safetensors").exists()
             assert saved == Path(base).with_suffix(".json")
 
     def test_load_restores_probe(self):
