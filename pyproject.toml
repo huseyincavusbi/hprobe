@@ -19,6 +19,7 @@ dependencies = [
     "tqdm>=4.65",
     "accelerate>=1.0",
     "pyarrow>=14.0",
+    "safetensors>=0.4.0",
 ]
 
 [project.urls]

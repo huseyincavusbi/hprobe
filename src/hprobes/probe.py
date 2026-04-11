@@ -1,13 +1,13 @@
 """HProbe — toolkit for H-Neuron discovery and causal validation."""
 
 import json
-import pickle
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 
 import numpy as np
 import torch
+from safetensors.torch import load_file, save_file
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import balanced_accuracy_score, roc_auc_score, roc_curve
 from sklearn.model_selection import train_test_split
@@ -606,7 +606,6 @@ class HProbe:
 
         # Ensure .json extension
         json_path = p.with_suffix(".json")
-        pkl_path = p.with_suffix(".pkl")
 
         out = {
             "saved_at": datetime.now(timezone.utc).isoformat(),
@@ -626,14 +625,7 @@ class HProbe:
         if self.cv_results_ is not None:
             out["causal_validation"] = {str(k): v for k, v in self.cv_results_.items()}
 
-        json_path.write_text(json.dumps(out, indent=2))
-
-        # Save classifier state for transfer experiments
-        clf_state = {
-            "clf": self._clf,
-            "top_k_idx": self._top_k_idx,
-            "col_mean": self._col_mean,
-            "col_std": self._col_std,
+        out["config"] = {
             "h_neurons": self.h_neurons_,
             "layers": self._layers,
             "intermediate_dim": self._intermediate_dim,
@@ -646,8 +638,26 @@ class HProbe:
             "answer_cue": self._answer_cue,
             "threshold": self.threshold_,
             "n_consistency": self.n_consistency,
+            "clf_classes": self._clf.classes_.tolist() if hasattr(self._clf, "classes_") else [],
         }
-        pkl_path.write_bytes(pickle.dumps(clf_state))
+
+        json_path.write_text(json.dumps(out, indent=2))
+
+        # Save classifier state for transfer experiments
+        tensors = {}
+        if hasattr(self._clf, "coef_"):
+            tensors["clf_coef"] = torch.tensor(self._clf.coef_)
+        if hasattr(self._clf, "intercept_"):
+            tensors["clf_intercept"] = torch.tensor(self._clf.intercept_)
+        if self._top_k_idx is not None:
+            tensors["top_k_idx"] = torch.tensor(self._top_k_idx)
+        if self._col_mean is not None:
+            tensors["col_mean"] = torch.tensor(self._col_mean)
+        if self._col_std is not None:
+            tensors["col_std"] = torch.tensor(self._col_std)
+
+        sf_path = p.with_suffix(".safetensors")
+        save_file(tensors, sf_path)
 
         return json_path
 
@@ -672,36 +682,67 @@ class HProbe:
         -------
         HProbe instance ready for score_on() or causal_validate().
         """
-        pkl_path = Path(path).with_suffix(".pkl")
-        if not pkl_path.exists():
-            raise FileNotFoundError(f"No saved probe found at {pkl_path}")
+        sf_path = Path(path).with_suffix(".safetensors")
+        json_path = Path(path).with_suffix(".json")
 
-        state = pickle.loads(pkl_path.read_bytes())
+        if not sf_path.exists() or not json_path.exists():
+            raise FileNotFoundError(f"Saved probe missing .safetensors or .json at {path}")
+
+        with open(json_path, "r") as f:
+            metadata = json.load(f)
+
+        if "config" not in metadata:
+            raise ValueError(
+                f"Invalid format: missing 'config' in {json_path}. Please re-fit the probe."
+            )
+
+        config = metadata["config"]
+        tensors = load_file(sf_path)
 
         probe = cls(
             model=model,
             tokenizer=tokenizer,
-            l1_C=state["l1_C"],
-            contrastive=state["contrastive"],
-            layer_stride=state["layer_stride"],
-            seed=state["seed"],
-            max_tokens=state["max_tokens"],
+            l1_C=config["l1_C"],
+            contrastive=config["contrastive"],
+            layer_stride=config["layer_stride"],
+            seed=config["seed"],
+            max_tokens=config["max_tokens"],
         )
-        probe._clf = state["clf"]
-        probe._top_k_idx = state["top_k_idx"]
-        probe._col_mean = state["col_mean"]
-        probe._col_std = state["col_std"]
-        probe.h_neurons_ = state["h_neurons"]
-        probe._layers = state["layers"]
-        probe._intermediate_dim = state["intermediate_dim"]
-        probe._n_features = state["n_features"]
-        probe._answer_cue = state["answer_cue"]
-        probe.threshold_ = state.get("threshold", 0.5)
-        probe.n_consistency = state.get("n_consistency", 1)
-        probe.n_neurons_ = len(state["h_neurons"])
+
+        # Reconstruct the LogisticRegression model
+        probe._clf = LogisticRegression(
+            solver="liblinear",
+            l1_ratio=1,
+            C=config["l1_C"],
+            class_weight="balanced",
+            max_iter=1000,
+            penalty="l1" if probe.contrastive else "elasticnet",
+        )
+
+        if "clf_coef" in tensors:
+            probe._clf.coef_ = tensors["clf_coef"].numpy()
+        if "clf_intercept" in tensors:
+            probe._clf.intercept_ = tensors["clf_intercept"].numpy()
+        if config.get("clf_classes"):
+            probe._clf.classes_ = np.array(config["clf_classes"])
+
+        probe._top_k_idx = tensors["top_k_idx"].numpy() if "top_k_idx" in tensors else None
+        probe._col_mean = tensors["col_mean"].numpy() if "col_mean" in tensors else None
+        probe._col_std = tensors["col_std"].numpy() if "col_std" in tensors else None
+
+        probe.h_neurons_ = [(layer, neuron) for layer, neuron in config["h_neurons"]]
+        probe._layers = config["layers"]
+        probe._intermediate_dim = config["intermediate_dim"]
+        probe._n_features = config["n_features"]
+        probe._answer_cue = config["answer_cue"]
+        probe.threshold_ = config.get("threshold", 0.5)
+        probe.n_consistency = config.get("n_consistency", 1)
+        probe.n_neurons_ = len(probe.h_neurons_)
+
         probe.layer_distribution_ = {}
-        for layer, _ in state["h_neurons"]:
+        for layer, _ in probe.h_neurons_:
             probe.layer_distribution_[layer] = probe.layer_distribution_.get(layer, 0) + 1
+
         total = probe._n_features if probe._n_features > 0 else 1
         probe.neuron_ratio_ = (probe.n_neurons_ / total) * 1000
         probe._col_norms = precompute_col_norms(model, probe._layers)
