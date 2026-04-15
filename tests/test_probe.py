@@ -1,5 +1,6 @@
 """Tests for hprobes.probe — HProbe class."""
 
+import json
 import tempfile
 from pathlib import Path
 
@@ -381,3 +382,101 @@ class TestConsistencyFilter:
             p.save(base)
             loaded = HProbe.load(base, MODEL, TOK)
             assert loaded.n_consistency == 5
+
+
+class TestCompareWith:
+    def test_compare_with_returns_dict(self):
+        p1 = HProbe(MODEL, TOK, l1_C=0.5)
+        p1.fit(SAMPLES, options_key="options", answer_key="answer")
+        p2 = HProbe(MODEL, TOK, l1_C=1.0)
+        p2.fit(SAMPLES, options_key="options", answer_key="answer")
+
+        result = p1.compare_with(p2)
+        assert isinstance(result, dict)
+        assert "jaccard_similarity" in result
+        assert "n_shared" in result
+        assert "n_union" in result
+        assert "n_only_self" in result
+        assert "n_only_other" in result
+        assert "shared_neurons" in result
+
+    def test_jaccard_similarity_in_range(self):
+        p1 = HProbe(MODEL, TOK, l1_C=0.5)
+        p1.fit(SAMPLES, options_key="options", answer_key="answer")
+        p2 = HProbe(MODEL, TOK, l1_C=1.0)
+        p2.fit(SAMPLES, options_key="options", answer_key="answer")
+
+        result = p1.compare_with(p2)
+        assert 0.0 <= result["jaccard_similarity"] <= 1.0
+
+    def test_identical_probes_have_jaccard_one(self):
+        p1 = HProbe(MODEL, TOK, l1_C=0.5)
+        p1.fit(SAMPLES, options_key="options", answer_key="answer")
+
+        result = p1.compare_with(p1)
+        # If no neurons found, jaccard is 0/0 = 0.0 by convention
+        # If neurons found, comparing with self should give 1.0
+        if p1.n_neurons_ > 0:
+            assert result["jaccard_similarity"] == 1.0
+            assert result["n_shared"] == p1.n_neurons_
+            assert result["n_only_self"] == 0
+            assert result["n_only_other"] == 0
+        else:
+            assert result["jaccard_similarity"] == 0.0
+
+    def test_compare_with_unfitted_raises(self):
+        p1 = HProbe(MODEL, TOK, l1_C=0.5)
+        p1.fit(SAMPLES, options_key="options", answer_key="answer")
+        p2 = HProbe(MODEL, TOK, l1_C=1.0)
+
+        with pytest.raises(RuntimeError, match="must be fitted"):
+            p1.compare_with(p2)
+
+    def test_shared_neurons_are_tuples(self):
+        p1 = HProbe(MODEL, TOK, l1_C=0.5)
+        p1.fit(SAMPLES, options_key="options", answer_key="answer")
+        p2 = HProbe(MODEL, TOK, l1_C=1.0)
+        p2.fit(SAMPLES, options_key="options", answer_key="answer")
+
+        result = p1.compare_with(p2)
+        if result["shared_neurons"]:
+            assert all(isinstance(n, list) and len(n) == 2 for n in result["shared_neurons"])
+
+
+class TestSaveMetadata:
+    def test_save_includes_metadata_field(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = str(Path(tmp) / "probe")
+            _PROBE.save(base)
+
+            json_path = Path(base).with_suffix(".json")
+            data = json.loads(json_path.read_text())
+
+            assert "metadata" in data
+            assert "model_name" in data["metadata"]
+            assert "n_layers" in data["metadata"]
+            assert "intermediate_dim" in data["metadata"]
+            assert "total_features" in data["metadata"]
+
+    def test_metadata_values_are_correct(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = str(Path(tmp) / "probe")
+            _PROBE.save(base)
+
+            json_path = Path(base).with_suffix(".json")
+            data = json.loads(json_path.read_text())
+
+            assert data["metadata"]["n_layers"] == len(_PROBE._layers)
+            assert data["metadata"]["intermediate_dim"] == _PROBE._intermediate_dim
+            assert data["metadata"]["total_features"] == _PROBE._n_features
+
+    def test_model_name_extracted_from_config(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = str(Path(tmp) / "probe")
+            _PROBE.save(base)
+
+            json_path = Path(base).with_suffix(".json")
+            data = json.loads(json_path.read_text())
+
+            # Metadata field should exist (model_name can be None for mock models)
+            assert "model_name" in data["metadata"]
