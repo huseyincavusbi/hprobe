@@ -18,6 +18,7 @@ from .cett import (
     available_layers,
     forward_cett,
     forward_cett_at_token,
+    forward_cett_at_token_batch,
     forward_cett_batch,
     forward_cett_span,
     precompute_col_norms,
@@ -1033,6 +1034,9 @@ class HProbe:
         try:
             for start in range(0, len(prompts), bs):
                 batch_prompts = prompts[start : start + bs]
+                batch_letters = (
+                    answer_letters[start : start + bs] if answer_letters is not None else None
+                )
 
                 enc = self.tokenizer(
                     batch_prompts,
@@ -1047,18 +1051,49 @@ class HProbe:
                 else:
                     last_positions = [enc["input_ids"].shape[1] - 1] * len(batch_prompts)
 
-                cett_matrix, _ = forward_cett_batch(
+                # Get answer letters if not provided
+                if batch_letters is None:
+                    _, logits_matrix = forward_cett_batch(
+                        self.model,
+                        enc,
+                        self._layers,
+                        self._col_norms,
+                        [int(p) for p in last_positions],
+                    )
+                    batch_letters = [
+                        self._predict_letter(logits_matrix[i]) for i in range(len(batch_prompts))
+                    ]
+                else:
+                    batch_letters = [lt.strip().upper() for lt in batch_letters]
+
+                # Get letter token IDs
+                letter_ids = [self._letter_ids.get(lt) for lt in batch_letters]
+                valid_idx = [i for i, lid in enumerate(letter_ids) if lid is not None]
+
+                if not valid_idx:
+                    # No valid letters, return 0.0 for all
+                    all_scores.extend([0.0] * len(batch_prompts))
+                    continue
+
+                # Extract CETT at answer tokens
+                valid_enc: Dict[str, torch.Tensor] = {"input_ids": enc["input_ids"][valid_idx]}
+                if "attention_mask" in enc:
+                    valid_enc["attention_mask"] = enc["attention_mask"][valid_idx]
+
+                cett_matrix = forward_cett_at_token_batch(
                     self.model,
-                    enc,
+                    valid_enc,
+                    [letter_ids[i] for i in valid_idx],
                     self._layers,
                     self._col_norms,
-                    [int(p) for p in last_positions],
                 )
-                scores_batch = []
-                for i in range(len(batch_prompts)):
-                    x = np.nan_to_num(cett_matrix[i].numpy().astype(np.float32))
+
+                # Map valid results back to original batch positions
+                scores_batch = [0.0] * len(batch_prompts)
+                for j, i in enumerate(valid_idx):
+                    x = np.nan_to_num(cett_matrix[j].numpy().astype(np.float32))
                     x_norm = (x[self._top_k_idx] - self._col_mean) / (self._col_std + 1e-8)
-                    scores_batch.append(float(self._clf.predict_proba(x_norm.reshape(1, -1))[0, 1]))
+                    scores_batch[i] = float(self._clf.predict_proba(x_norm.reshape(1, -1))[0, 1])
 
                 all_scores.extend(scores_batch)
 
