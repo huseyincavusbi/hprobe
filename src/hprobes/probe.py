@@ -543,9 +543,9 @@ class HProbe:
     ) -> Dict[float, float]:
         """Scale H-Neuron activations by each alpha and measure accuracy on val split.
 
-        Default labeling:    suppression (alpha<1) lowers accuracy,
-                             amplification (alpha>1) raises it.
-        Contrastive labeling: direction is inverted.
+        Labeling convention (Incorrect=1):
+            suppression (alpha<1) should INCREASE accuracy,
+            amplification (alpha>1) should DECREASE accuracy.
 
         Returns
         -------
@@ -790,7 +790,7 @@ class HProbe:
             try:
                 cett_vec, logits = forward_cett(self.model, tokens, self._layers, self._col_norms)
                 pred = self._predict_letter(logits)
-                label = 0 if pred == gt else 1
+                label = 1 if pred != gt else 0
                 X.append(cett_vec.numpy())
                 y.append(label)
             except (ValueError, KeyError, RuntimeError, IndexError, TypeError) as e:
@@ -1287,11 +1287,27 @@ class HProbe:
                 }
             )
 
-            vec = np.nan_to_num(cett_vec.numpy().astype(np.float32))
-            cett_raw.append(vec)
-            train_labels.append(int(is_correct))
+            # 1. Answer token pass
+            letter_token_id = self._letter_ids.get(pred)
+            if letter_token_id is not None:
+                try:
+                    cett_ans = forward_cett_at_token(
+                        self.model, tokens, letter_token_id, self._layers, self._col_norms
+                    )
+                    ans_vec = np.nan_to_num(cett_ans.numpy().astype(np.float32))
+                    cett_raw.append(ans_vec)
+                    train_labels.append(1 if not is_correct else 0)
+                    row_to_sample.append(sample_pos)
+                    self._welford_update(ans_vec)
+                except Exception as e:
+                    logging.warning(f"Error extracting answer CETT: {e}")
+
+            # 2. Negative Control (Last prompt token)
+            prompt_vec = np.nan_to_num(cett_vec.numpy().astype(np.float32))
+            cett_raw.append(prompt_vec)
+            train_labels.append(0)
             row_to_sample.append(sample_pos)
-            self._welford_update(vec)
+            self._welford_update(prompt_vec)
 
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
