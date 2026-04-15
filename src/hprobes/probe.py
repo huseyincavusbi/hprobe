@@ -631,7 +631,6 @@ class HProbe:
             "intermediate_dim": self._intermediate_dim,
             "n_features": self._n_features,
             "l1_C": self.l1_C,
-            "contrastive": self.contrastive,
             "layer_stride": self.layer_stride,
             "seed": self.seed,
             "max_tokens": self.max_tokens,
@@ -703,7 +702,6 @@ class HProbe:
             model=model,
             tokenizer=tokenizer,
             l1_C=config["l1_C"],
-            contrastive=config["contrastive"],
             layer_stride=config["layer_stride"],
             seed=config["seed"],
             max_tokens=config["max_tokens"],
@@ -716,7 +714,7 @@ class HProbe:
             C=config["l1_C"],
             class_weight="balanced",
             max_iter=1000,
-            penalty="l1" if probe.contrastive else "elasticnet",
+            penalty="l1",
         )
 
         if "clf_coef" in tensors:
