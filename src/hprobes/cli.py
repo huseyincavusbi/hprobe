@@ -313,6 +313,78 @@ def cmd_transfer(args: argparse.Namespace) -> None:
     print(sep + "\n")
 
 
+def cmd_compare(args: argparse.Namespace) -> None:
+    """Compare H-Neurons between two saved probes."""
+    import json
+    from pathlib import Path
+
+    from hprobes import __version__
+
+    sep = "─" * 68
+    print(f"\nhprobes v{__version__}  |  compare")
+    print(sep)
+
+    # Load probe metadata from JSON files
+    probe1_path = Path(args.probe1)
+    probe2_path = Path(args.probe2)
+
+    if not probe1_path.exists():
+        print(f"Error: {probe1_path} not found")
+        return
+    if not probe2_path.exists():
+        print(f"Error: {probe2_path} not found")
+        return
+
+    probe1_data = json.loads(probe1_path.read_text())
+    probe2_data = json.loads(probe2_path.read_text())
+
+    # Extract H-Neuron lists
+    h_neurons_1 = set(tuple(n) for n in probe1_data["fit"]["h_neurons"])
+    h_neurons_2 = set(tuple(n) for n in probe2_data["fit"]["h_neurons"])
+
+    # Calculate Jaccard similarity
+    intersection = h_neurons_1 & h_neurons_2
+    union = h_neurons_1 | h_neurons_2
+
+    jaccard = len(intersection) / len(union) if union else 0.0
+
+    # Print comparison
+    print(f"\n  Probe 1: {probe1_path.name}")
+    print(f"    Model:     {probe1_data.get('model', 'N/A')}")
+    print(f"    H-Neurons: {len(h_neurons_1)}")
+    print(f"    C value:   {probe1_data.get('config', {}).get('l1_C', 'N/A')}")
+
+    print(f"\n  Probe 2: {probe2_path.name}")
+    print(f"    Model:     {probe2_data.get('model', 'N/A')}")
+    print(f"    H-Neurons: {len(h_neurons_2)}")
+    print(f"    C value:   {probe2_data.get('config', {}).get('l1_C', 'N/A')}")
+
+    print("\n  Comparison:")
+    print(f"    Jaccard similarity: {jaccard:.4f}")
+    print(f"    Shared neurons:     {len(intersection)}")
+    print(f"    Union size:         {len(union)}")
+    print(f"    Only in probe 1:    {len(h_neurons_1 - h_neurons_2)}")
+    print(f"    Only in probe 2:    {len(h_neurons_2 - h_neurons_1)}")
+
+    # Save if requested
+    if args.output:
+        result = {
+            "probe1": str(probe1_path),
+            "probe2": str(probe2_path),
+            "jaccard_similarity": jaccard,
+            "n_shared": len(intersection),
+            "n_union": len(union),
+            "n_only_probe1": len(h_neurons_1 - h_neurons_2),
+            "n_only_probe2": len(h_neurons_2 - h_neurons_1),
+            "shared_neurons": sorted([list(n) for n in intersection]),
+        }
+        out_path = Path(args.output)
+        out_path.write_text(json.dumps(result, indent=2))
+        print(f"\n  Saved → {out_path}")
+
+    print(sep + "\n")
+
+
 def _add_common_model_args(p):
     """Add --device, --dtype, and --trust-remote-code to a subparser."""
     p.add_argument("--device", default="auto", help="Device: auto, cpu, mps, cuda (default: auto)")
@@ -490,6 +562,18 @@ def main() -> None:
     )
     _add_common_model_args(transfer_p)
 
+    # ── hprobes compare ────────────────────────────────────────────────────────
+    compare_p = subparsers.add_parser(
+        "compare", help="Compare H-Neurons between two saved probes (Jaccard similarity)"
+    )
+    compare_p.add_argument("probe1", help="Path to first saved probe (e.g. results/probe_c01.json)")
+    compare_p.add_argument("probe2", help="Path to second saved probe (e.g. results/probe_c1.json)")
+    compare_p.add_argument(
+        "--output",
+        default=None,
+        help="Path to save comparison results (default: print to stdout)",
+    )
+
     args = parser.parse_args()
     if args.command == "run":
         cmd_run(args)
@@ -497,6 +581,8 @@ def main() -> None:
         cmd_responses(args)
     elif args.command == "transfer":
         cmd_transfer(args)
+    elif args.command == "compare":
+        cmd_compare(args)
 
 
 if __name__ == "__main__":
