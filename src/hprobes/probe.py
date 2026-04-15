@@ -971,24 +971,21 @@ class HProbe:
 
         tokens = self._tokenize(prompt)
 
-        if self.contrastive:
-            if answer_letter is None:
-                _, logits = forward_cett(self.model, tokens, self._layers, self._col_norms)
-                answer_letter = self._predict_letter(logits)
-            else:
-                answer_letter = answer_letter.strip().upper()
-
-            letter_token_id = self._letter_ids.get(answer_letter)
-            if letter_token_id is None:
-                raise ValueError(
-                    f"Unknown answer letter {answer_letter!r}. "
-                    f"Expected one of {list(self._letter_ids)}"
-                )
-            cett_vec = forward_cett_at_token(
-                self.model, tokens, letter_token_id, self._layers, self._col_norms
-            )
+        # Always use 3-vs-1 approach: CETT at answer token
+        if answer_letter is None:
+            _, logits = forward_cett(self.model, tokens, self._layers, self._col_norms)
+            answer_letter = self._predict_letter(logits)
         else:
-            cett_vec, _ = forward_cett(self.model, tokens, self._layers, self._col_norms)
+            answer_letter = answer_letter.strip().upper()
+
+        letter_token_id = self._letter_ids.get(answer_letter)
+        if letter_token_id is None:
+            raise ValueError(
+                f"Unknown answer letter {answer_letter!r}. Expected one of {list(self._letter_ids)}"
+            )
+        cett_vec = forward_cett_at_token(
+            self.model, tokens, letter_token_id, self._layers, self._col_norms
+        )
 
         x = np.nan_to_num(cett_vec.numpy().astype(np.float32))
         x_sel = x[self._top_k_idx]
