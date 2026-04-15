@@ -174,7 +174,6 @@ def cmd_run(args: argparse.Namespace) -> None:
         model,
         tokenizer,
         l1_C=args.l1_c,
-        contrastive=not args.no_contrastive,
         layer_stride=args.layer_stride,
         validation_split=args.validation_split,
         seed=args.seed,
