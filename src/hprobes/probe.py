@@ -1226,11 +1226,55 @@ class HProbe:
                 valid_gt.append(gt)
                 per_sample.append({"predicted": pred, "ground_truth": gt, "is_correct": is_correct})
 
-                vec = np.nan_to_num(cett_matrix[i].numpy().astype(np.float32))
-                cett_raw.append(vec)
-                train_labels.append(int(is_correct))
-                row_to_sample.append(sample_pos)
-                self._welford_update(vec)
+                # 1. Decision Token (The Answer)
+                letter_token_id = self._letter_ids.get(pred)
+                if letter_token_id is not None:
+                    try:
+                        sample_tokens = self._tokenize(prompt)
+                        cett_ans = forward_cett_at_token(
+                            self.model,
+                            sample_tokens,
+                            letter_token_id,
+                            self._layers,
+                            self._col_norms,
+                        )
+                        ans_vec = np.nan_to_num(cett_ans.numpy().astype(np.float32))
+                        cett_raw.append(ans_vec)
+                        # As per AP-1: 1 if Incorrect (Hallucination), 0 if Correct
+                        train_labels.append(1 if not is_correct else 0)
+                        row_to_sample.append(sample_pos)
+                        self._welford_update(ans_vec)
+                    except Exception as e:
+                        logging.warning(f"Error extracting decision CETT: {e}")
+
+                # 2. Prompt Tokens (3 Negative Controls per the paper's 3-vs-1 ratio)
+                try:
+                    # cett_matrix[i] is already the last prompt token from the batch pass
+                    last_prompt_vec = np.nan_to_num(cett_matrix[i].numpy().astype(np.float32))
+                    cett_raw.append(last_prompt_vec)
+                    train_labels.append(0)
+                    row_to_sample.append(sample_pos)
+                    self._welford_update(last_prompt_vec)
+
+                    # Extract 2 more tokens for the 3-vs-1 ratio
+                    sample_tokens = self._tokenize(prompt)
+                    seq_len = sample_tokens["input_ids"].shape[1]
+                    for pos in [-2, -3]:
+                        if abs(pos) <= seq_len:
+                            c_vec, _ = forward_cett(
+                                self.model,
+                                sample_tokens,
+                                self._layers,
+                                self._col_norms,
+                                token_position=pos,
+                            )
+                            neg_vec = np.nan_to_num(c_vec.numpy().astype(np.float32))
+                            cett_raw.append(neg_vec)
+                            train_labels.append(0)
+                            row_to_sample.append(sample_pos)
+                            self._welford_update(neg_vec)
+                except Exception as e:
+                    logging.warning(f"Error extracting prompt controls in batch: {e}")
 
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
@@ -1287,7 +1331,7 @@ class HProbe:
                 }
             )
 
-            # 1. Answer token pass
+            # 1. Decision Token (The Answer)
             letter_token_id = self._letter_ids.get(pred)
             if letter_token_id is not None:
                 try:
@@ -1300,14 +1344,23 @@ class HProbe:
                     row_to_sample.append(sample_pos)
                     self._welford_update(ans_vec)
                 except Exception as e:
-                    logging.warning(f"Error extracting answer CETT: {e}")
+                    logging.warning(f"Error extracting decision CETT: {e}")
 
-            # 2. Negative Control (Last prompt token)
-            prompt_vec = np.nan_to_num(cett_vec.numpy().astype(np.float32))
-            cett_raw.append(prompt_vec)
-            train_labels.append(0)
-            row_to_sample.append(sample_pos)
-            self._welford_update(prompt_vec)
+            # 2. Prompt Tokens (3 Negative Controls per the paper's 3-vs-1 ratio)
+            try:
+                seq_len = tokens["input_ids"].shape[1]
+                for pos in [-1, -2, -3]:
+                    if abs(pos) <= seq_len:
+                        c_vec, _ = forward_cett(
+                            self.model, tokens, self._layers, self._col_norms, token_position=pos
+                        )
+                        neg_vec = np.nan_to_num(c_vec.numpy().astype(np.float32))
+                        cett_raw.append(neg_vec)
+                        train_labels.append(0)
+                        row_to_sample.append(sample_pos)
+                        self._welford_update(neg_vec)
+            except Exception as e:
+                logging.warning(f"Error extracting prompt controls: {e}")
 
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
