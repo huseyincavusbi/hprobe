@@ -202,7 +202,7 @@ class TestFitAndScore:
         assert all(0.0 <= v <= 1.0 for v in result.values())
 
     def test_contrastive_mode(self):
-        p = HProbe(MODEL, TOK, l1_C=0.5, contrastive=True)
+        p = HProbe(MODEL, TOK, l1_C=0.5)
         p.fit(SAMPLES, options_key="options", answer_key="answer")
         assert p.is_fitted_
 
@@ -311,13 +311,13 @@ class TestDetect:
         assert abs(score_lower - score_upper) < 1e-6
 
     def test_invalid_answer_letter_raises(self):
-        probe = HProbe(MODEL, TOK, l1_C=0.5, contrastive=True)
+        probe = HProbe(MODEL, TOK, l1_C=0.5)
         probe.fit(SAMPLES, options_key="options", answer_key="answer")
         with pytest.raises(ValueError):
             probe.detect("some prompt", answer_letter="Z")
 
     def test_non_contrastive_detect(self):
-        p = HProbe(MODEL, TOK, l1_C=0.5, contrastive=False)
+        p = HProbe(MODEL, TOK, l1_C=0.5)
         p.fit(SAMPLES, options_key="options", answer_key="answer")
         score = p.detect("Q0? Options: A) alpha B) beta\n\nAnswer:")
         assert 0.0 <= score <= 1.0
@@ -357,7 +357,7 @@ class TestDetectBatch:
         assert abs(batch_score - single_score) < 1e-5
 
     def test_non_contrastive_batch(self):
-        p = HProbe(MODEL, TOK, l1_C=0.5, contrastive=False)
+        p = HProbe(MODEL, TOK, l1_C=0.5)
         p.fit(SAMPLES, options_key="options", answer_key="answer")
         scores = p.detect_batch(self._prompts(4), batch_size=2)
         assert len(scores) == 4
