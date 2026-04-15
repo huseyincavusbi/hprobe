@@ -18,7 +18,6 @@ from .cett import (
     available_layers,
     forward_cett,
     forward_cett_at_token,
-    forward_cett_at_token_batch,
     forward_cett_batch,
     forward_cett_span,
     precompute_col_norms,
@@ -72,7 +71,6 @@ class HProbe:
         model: torch.nn.Module,
         tokenizer,
         l1_C: float = 0.01,
-        contrastive: bool = True,
         layer_stride: int = 1,
         validation_split: float = 0.2,
         seed: int = 42,
@@ -84,7 +82,6 @@ class HProbe:
         self.tokenizer = tokenizer
         self.l1_C = l1_C
         self.batch_size = batch_size
-        self.contrastive = contrastive
         self.layer_stride = layer_stride
         self.validation_split = validation_split
         self.seed = seed
@@ -169,10 +166,7 @@ class HProbe:
         self._letter_ids = self._get_letter_ids()
         top_k = min(5000, self._n_features)
 
-        print(
-            f"[hprobes] Layers: {len(self._layers)}  |  "
-            f"Features: {self._n_features:,}  |  Contrastive: {self.contrastive}"
-        )
+        print(f"[hprobes] Layers: {len(self._layers)}  |  Features: {self._n_features:,}")
 
         # --- Phase 1: extract CETT features ---
         cett_raw, train_labels, row_to_sample, valid_prompts, valid_gt, per_sample = (
@@ -794,30 +788,11 @@ class HProbe:
             )
             tokens = self._tokenize(prompt)
             try:
-                if self.contrastive:
-                    cett_prompt, logits = forward_cett(
-                        self.model, tokens, self._layers, self._col_norms
-                    )
-                    pred = self._predict_letter(logits)
-                    letter_token_id = self._letter_ids.get(pred)
-                    if letter_token_id is None:
-                        continue
-                    cett_ans = forward_cett_at_token(
-                        self.model, tokens, letter_token_id, self._layers, self._col_norms
-                    )
-                    label = 1 if pred != gt else 0
-                    X.append(cett_ans.numpy())
-                    y.append(label)
-                    X.append(cett_prompt.numpy())
-                    y.append(0)
-                else:
-                    cett_vec, logits = forward_cett(
-                        self.model, tokens, self._layers, self._col_norms
-                    )
-                    pred = self._predict_letter(logits)
-                    label = 0 if pred == gt else 1
-                    X.append(cett_vec.numpy())
-                    y.append(label)
+                cett_vec, logits = forward_cett(self.model, tokens, self._layers, self._col_norms)
+                pred = self._predict_letter(logits)
+                label = 0 if pred == gt else 1
+                X.append(cett_vec.numpy())
+                y.append(label)
             except (ValueError, KeyError, RuntimeError, IndexError, TypeError) as e:
                 logging.warning(f"Error: {e}")
                 continue
@@ -992,9 +967,6 @@ class HProbe:
         try:
             for start in range(0, len(prompts), bs):
                 batch_prompts = prompts[start : start + bs]
-                batch_letters = (
-                    answer_letters[start : start + bs] if answer_letters is not None else None
-                )
 
                 enc = self.tokenizer(
                     batch_prompts,
@@ -1009,60 +981,18 @@ class HProbe:
                 else:
                     last_positions = [enc["input_ids"].shape[1] - 1] * len(batch_prompts)
 
-                if self.contrastive:
-                    if batch_letters is None:
-                        _, logits_matrix = forward_cett_batch(
-                            self.model,
-                            enc,
-                            self._layers,
-                            self._col_norms,
-                            [int(p) for p in last_positions],
-                        )
-                        batch_letters = [
-                            self._predict_letter(logits_matrix[i])
-                            for i in range(len(batch_prompts))
-                        ]
-                    else:
-                        batch_letters = [lt.strip().upper() for lt in batch_letters]
-
-                    letter_ids = [self._letter_ids.get(lt) for lt in batch_letters]
-                    valid_idx = [i for i, lid in enumerate(letter_ids) if lid is not None]
-
-                    valid_enc: Dict[str, torch.Tensor] = {"input_ids": enc["input_ids"][valid_idx]}
-                    if "attention_mask" in enc:
-                        valid_enc["attention_mask"] = enc["attention_mask"][valid_idx]
-
-                    cett_matrix = forward_cett_at_token_batch(
-                        self.model,
-                        valid_enc,
-                        [letter_ids[i] for i in valid_idx],
-                        self._layers,
-                        self._col_norms,
-                    )
-
-                    # Map valid results back to original batch positions
-                    scores_batch = [float("nan")] * len(batch_prompts)
-                    for j, i in enumerate(valid_idx):
-                        x = np.nan_to_num(cett_matrix[j].numpy().astype(np.float32))
-                        x_norm = (x[self._top_k_idx] - self._col_mean) / (self._col_std + 1e-8)
-                        scores_batch[i] = float(
-                            self._clf.predict_proba(x_norm.reshape(1, -1))[0, 1]
-                        )
-                else:
-                    cett_matrix, _ = forward_cett_batch(
-                        self.model,
-                        enc,
-                        self._layers,
-                        self._col_norms,
-                        [int(p) for p in last_positions],
-                    )
-                    scores_batch = []
-                    for i in range(len(batch_prompts)):
-                        x = np.nan_to_num(cett_matrix[i].numpy().astype(np.float32))
-                        x_norm = (x[self._top_k_idx] - self._col_mean) / (self._col_std + 1e-8)
-                        scores_batch.append(
-                            float(self._clf.predict_proba(x_norm.reshape(1, -1))[0, 1])
-                        )
+                cett_matrix, _ = forward_cett_batch(
+                    self.model,
+                    enc,
+                    self._layers,
+                    self._col_norms,
+                    [int(p) for p in last_positions],
+                )
+                scores_batch = []
+                for i in range(len(batch_prompts)):
+                    x = np.nan_to_num(cett_matrix[i].numpy().astype(np.float32))
+                    x_norm = (x[self._top_k_idx] - self._col_mean) / (self._col_std + 1e-8)
+                    scores_batch.append(float(self._clf.predict_proba(x_norm.reshape(1, -1))[0, 1]))
 
                 all_scores.extend(scores_batch)
 
@@ -1288,78 +1218,19 @@ class HProbe:
                 skipped += len(buf)
                 return
 
-            if self.contrastive:
-                preds = [self._predict_letter(logits_matrix[i]) for i in range(len(buf))]
-                letter_ids = [self._letter_ids.get(p) for p in preds]
+            for i, (sample, gt, prompt) in enumerate(buf):
+                pred = self._predict_letter(logits_matrix[i])
+                is_correct = pred == gt
+                sample_pos = len(valid_prompts)
+                valid_prompts.append(prompt)
+                valid_gt.append(gt)
+                per_sample.append({"predicted": pred, "ground_truth": gt, "is_correct": is_correct})
 
-                # filter out samples with unknown letter token
-                valid_idx = [i for i, lid in enumerate(letter_ids) if lid is not None]
-                if not valid_idx:
-                    skipped += len(buf)
-                    return
-
-                valid_enc_ids = enc["input_ids"][valid_idx]
-                valid_enc_mask = enc.get("attention_mask")
-                valid_enc: Dict[str, torch.Tensor] = {"input_ids": valid_enc_ids}
-                if valid_enc_mask is not None:
-                    valid_enc["attention_mask"] = valid_enc_mask[valid_idx]
-
-                try:
-                    cett_ans_matrix = forward_cett_at_token_batch(
-                        self.model,
-                        valid_enc,
-                        [letter_ids[i] for i in valid_idx],
-                        self._layers,
-                        self._col_norms,
-                    )
-                except (ValueError, KeyError, RuntimeError, IndexError, TypeError) as e:
-                    logging.warning(f"Error: {e}")
-                    skipped += len(buf)
-                    return
-
-                for j, i in enumerate(valid_idx):
-                    sample, gt, prompt = buf[i]
-                    pred = preds[i]
-                    is_correct = pred == gt
-                    sample_pos = len(valid_prompts)
-                    valid_prompts.append(prompt)
-                    valid_gt.append(gt)
-                    per_sample.append(
-                        {"predicted": pred, "ground_truth": gt, "is_correct": is_correct}
-                    )
-
-                    ans = np.nan_to_num(cett_ans_matrix[j].numpy().astype(np.float32))
-                    oth = np.nan_to_num(cett_matrix[i].numpy().astype(np.float32))
-
-                    cett_raw.append(ans)
-                    train_labels.append(0 if is_correct else 1)
-                    row_to_sample.append(sample_pos)
-
-                    cett_raw.append(oth)
-                    train_labels.append(0)
-                    row_to_sample.append(sample_pos)
-
-                    for vec in (ans, oth):
-                        self._welford_update(vec)
-
-                skipped += len(buf) - len(valid_idx)
-
-            else:
-                for i, (sample, gt, prompt) in enumerate(buf):
-                    pred = self._predict_letter(logits_matrix[i])
-                    is_correct = pred == gt
-                    sample_pos = len(valid_prompts)
-                    valid_prompts.append(prompt)
-                    valid_gt.append(gt)
-                    per_sample.append(
-                        {"predicted": pred, "ground_truth": gt, "is_correct": is_correct}
-                    )
-
-                    vec = np.nan_to_num(cett_matrix[i].numpy().astype(np.float32))
-                    cett_raw.append(vec)
-                    train_labels.append(int(is_correct))
-                    row_to_sample.append(sample_pos)
-                    self._welford_update(vec)
+                vec = np.nan_to_num(cett_matrix[i].numpy().astype(np.float32))
+                cett_raw.append(vec)
+                train_labels.append(int(is_correct))
+                row_to_sample.append(sample_pos)
+                self._welford_update(vec)
 
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
@@ -1416,46 +1287,11 @@ class HProbe:
                 }
             )
 
-            if self.contrastive:
-                letter_token_id = self._letter_ids.get(pred)
-                if letter_token_id is None:
-                    valid_prompts.pop()
-                    valid_gt.pop()
-                    per_sample.pop()
-                    skipped += 1
-                    continue
-                try:
-                    cett_ans_vec = forward_cett_at_token(
-                        self.model, tokens, letter_token_id, self._layers, self._col_norms
-                    )
-                except (ValueError, KeyError, RuntimeError, IndexError, TypeError) as e:
-                    logging.warning(f"Error: {e}")
-                    valid_prompts.pop()
-                    valid_gt.pop()
-                    per_sample.pop()
-                    skipped += 1
-                    continue
-
-                ans = np.nan_to_num(cett_ans_vec.numpy().astype(np.float32))
-                oth = np.nan_to_num(cett_vec.numpy().astype(np.float32))
-
-                cett_raw.append(ans)
-                train_labels.append(0 if is_correct else 1)
-                row_to_sample.append(sample_pos)
-
-                cett_raw.append(oth)
-                train_labels.append(0)
-                row_to_sample.append(sample_pos)
-
-                for vec in (ans, oth):
-                    self._welford_update(vec)
-
-            else:
-                vec = np.nan_to_num(cett_vec.numpy().astype(np.float32))
-                cett_raw.append(vec)
-                train_labels.append(int(is_correct))
-                row_to_sample.append(sample_pos)
-                self._welford_update(vec)
+            vec = np.nan_to_num(cett_vec.numpy().astype(np.float32))
+            cett_raw.append(vec)
+            train_labels.append(int(is_correct))
+            row_to_sample.append(sample_pos)
+            self._welford_update(vec)
 
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
