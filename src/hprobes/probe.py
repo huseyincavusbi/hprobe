@@ -4,7 +4,7 @@ import logging
 import json
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import numpy as np
 import torch
@@ -582,6 +582,64 @@ class HProbe:
         self.cv_results_ = results
         return results
 
+    def compare_with(self, other: "HProbe") -> Dict[str, Any]:
+        """Compare H-Neurons with another fitted probe.
+
+        Computes Jaccard similarity and overlap statistics between the H-Neuron
+        sets identified by this probe and another probe. Useful for:
+        - Testing stability across different C values (AP-6)
+        - Comparing base vs fine-tuned models (AP-4)
+        - Cross-model comparisons (AP-12)
+
+        Parameters
+        ----------
+        other : HProbe
+            Another fitted probe to compare against.
+
+        Returns
+        -------
+        dict with keys:
+            jaccard_similarity : float
+                Jaccard index (intersection / union), range [0, 1]
+            n_shared : int
+                Number of neurons in both sets
+            n_union : int
+                Total unique neurons across both sets
+            n_only_self : int
+                Neurons only in this probe
+            n_only_other : int
+                Neurons only in the other probe
+            shared_neurons : list of [layer, neuron] pairs
+                The actual shared neurons, sorted by layer then neuron index
+
+        Examples
+        --------
+        >>> probe1 = HProbe(model, tok, l1_C=0.1).fit(samples)
+        >>> probe2 = HProbe(model, tok, l1_C=1.0).fit(samples)
+        >>> comparison = probe1.compare_with(probe2)
+        >>> print(f"Jaccard: {comparison['jaccard_similarity']:.3f}")
+        >>> print(f"Shared: {comparison['n_shared']} neurons")
+        """
+        if not self.is_fitted_:
+            raise RuntimeError("This probe must be fitted before comparison")
+        if not other.is_fitted_:
+            raise RuntimeError("Other probe must be fitted before comparison")
+
+        set_self = set(self.h_neurons_)
+        set_other = set(other.h_neurons_)
+
+        intersection = set_self & set_other
+        union = set_self | set_other
+
+        return {
+            "jaccard_similarity": len(intersection) / len(union) if union else 0.0,
+            "n_shared": len(intersection),
+            "n_union": len(union),
+            "n_only_self": len(set_self - set_other),
+            "n_only_other": len(set_other - set_self),
+            "shared_neurons": sorted([list(n) for n in intersection]),
+        }
+
     def save(self, path: str) -> Path:
         """Save probe results and classifier to disk.
 
@@ -607,9 +665,16 @@ class HProbe:
         # Ensure .json extension
         json_path = p.with_suffix(".json")
 
+        # Extract model metadata for comparison
+        model_name = None
+        if hasattr(self.model, "config"):
+            model_name = getattr(self.model.config, "_name_or_path", None)
+            if model_name is None:
+                model_name = getattr(self.model.config, "model_type", None)
+
         out = {
             "saved_at": datetime.now(timezone.utc).isoformat(),
-            "model": getattr(self, "model_id", None),
+            "model": model_name or getattr(self, "model_id", None),
             "dataset": getattr(self, "dataset_name", None),
             "n_samples": getattr(self, "n_samples_used", None),
             "fit": {
@@ -618,6 +683,12 @@ class HProbe:
                 "accuracy": self.accuracy_,
                 "layer_distribution": {str(k): v for k, v in self.layer_distribution_.items()},
                 "h_neurons": [list(n) for n in self.h_neurons_],
+            },
+            "metadata": {
+                "model_name": model_name,
+                "n_layers": len(self._layers),
+                "intermediate_dim": self._intermediate_dim,
+                "total_features": self._n_features,
             },
         }
         if self.score_results_ is not None:
