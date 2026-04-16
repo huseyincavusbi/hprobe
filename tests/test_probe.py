@@ -480,3 +480,86 @@ class TestSaveMetadata:
 
             # Metadata field should exist (model_name can be None for mock models)
             assert "model_name" in data["metadata"]
+
+
+class TestLabelFn:
+    """Test custom label_fn for control probes."""
+
+    def test_answer_letter_control(self):
+        """Test control probe that predicts answer letter A vs not-A."""
+        probe = HProbe(MODEL, TOK, batch_size=1, l1_C=0.5)
+
+        # Label function: 1 if predicted answer is "A", 0 otherwise
+        # Note: This test verifies the label_fn parameter works, even if
+        # the mock model happens to predict all the same letter
+        try:
+            probe.fit(
+                SAMPLES,
+                options_key="options",
+                answer_key="answer",
+                label_fn=lambda pred, gt, sample: 1 if pred == "A" else 0,
+            )
+            assert probe.is_fitted_
+            assert probe.n_neurons_ >= 0
+        except ValueError as e:
+            # If all predictions are the same letter, sklearn will raise ValueError
+            # This is expected behavior for a control probe with uniform predictions
+            if "multiclass classification" in str(e) or "n_classes" in str(e):
+                pytest.skip(
+                    "Mock model produces uniform predictions, cannot train binary classifier"
+                )
+            raise
+
+    def test_domain_control(self):
+        """Test control probe that predicts domain/subject."""
+        # Add subject field to samples
+        samples_with_subject = [
+            {**s, "subject": "Anatomy" if i % 2 == 0 else "Physiology"}
+            for i, s in enumerate(SAMPLES)
+        ]
+
+        probe = HProbe(MODEL, TOK, batch_size=1, l1_C=0.5)
+
+        # Label function: 1 if subject is Anatomy, 0 otherwise
+        probe.fit(
+            samples_with_subject,
+            options_key="options",
+            answer_key="answer",
+            label_fn=lambda pred, gt, sample: 1 if sample.get("subject") == "Anatomy" else 0,
+        )
+
+        assert probe.is_fitted_
+        assert probe.n_neurons_ >= 0
+
+    def test_default_behavior_unchanged(self):
+        """Test that default behavior (no label_fn) still works as hallucination probe."""
+        probe_default = HProbe(MODEL, TOK, batch_size=1, l1_C=0.5)
+        probe_default.fit(SAMPLES, options_key="options", answer_key="answer")
+
+        probe_explicit = HProbe(MODEL, TOK, batch_size=1, l1_C=0.5)
+        probe_explicit.fit(
+            SAMPLES,
+            options_key="options",
+            answer_key="answer",
+            label_fn=lambda pred, gt, sample: 1 if pred != gt else 0,
+        )
+
+        # Both should identify the same neurons (hallucination labeling)
+        assert probe_default.n_neurons_ == probe_explicit.n_neurons_
+        assert probe_default.h_neurons_ == probe_explicit.h_neurons_
+
+    def test_inverted_labeling(self):
+        """Test inverted labeling: correct=1, incorrect=0."""
+        probe = HProbe(MODEL, TOK, batch_size=1, l1_C=0.5)
+
+        # Inverted: 1 if correct, 0 if incorrect
+        probe.fit(
+            SAMPLES,
+            options_key="options",
+            answer_key="answer",
+            label_fn=lambda pred, gt, sample: 1 if pred == gt else 0,
+        )
+
+        assert probe.is_fitted_
+        # Should still find neurons, but they encode correctness instead of hallucination
+        assert probe.n_neurons_ >= 0

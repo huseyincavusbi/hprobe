@@ -134,6 +134,7 @@ class HProbe:
         answer_key: str = "answer",
         prompt_fn: Optional[Callable[[Dict], str]] = None,
         answer_cue: str = "\n\nAnswer:",
+        label_fn: Optional[Callable[[str, str, Dict], int]] = None,
     ) -> "HProbe":
         """Discover H-Neurons from MCQ samples.
 
@@ -154,6 +155,12 @@ class HProbe:
         answer_cue : str
             String appended to every prompt to elicit a single-letter answer.
             Default "\\n\\nAnswer:".
+        label_fn : callable, optional
+            Custom labeling function (predicted, ground_truth, sample) -> int (0 or 1).
+            If None, uses default hallucination labeling: 1 if incorrect, 0 if correct.
+            For control probes, pass a custom function, e.g.:
+            - Answer letter control: lambda pred, gt, s: 1 if pred == "A" else 0
+            - Domain control: lambda pred, gt, s: 1 if s.get("subject") == "Anatomy" else 0
 
         Returns
         -------
@@ -172,7 +179,14 @@ class HProbe:
         # --- Phase 1: extract CETT features ---
         cett_raw, train_labels, row_to_sample, valid_prompts, valid_gt, per_sample = (
             self._extract_features(
-                samples, question_key, options_key, answer_key, prompt_fn, answer_cue, top_k
+                samples,
+                question_key,
+                options_key,
+                answer_key,
+                prompt_fn,
+                answer_cue,
+                top_k,
+                label_fn,
             )
         )
 
@@ -1257,6 +1271,7 @@ class HProbe:
         prompt_fn: Optional[Callable],
         answer_cue: str,
         top_k: int,
+        label_fn: Optional[Callable[[str, str, Dict], int]],
     ):
         """Extract CETT feature vectors for all samples.
 
@@ -1269,6 +1284,12 @@ class HProbe:
         -------
         cett_raw, train_labels, row_to_sample, valid_prompts, valid_gt, per_sample
         """
+        # Default labeling: hallucination (incorrect=1, correct=0)
+        if label_fn is None:
+
+            def label_fn(pred, gt, sample):
+                return 1 if pred != gt else 0
+
         self._welford_n = 0
         self._welford_mean = np.zeros(self._n_features, dtype=np.float64)
         self._welford_M2 = np.zeros(self._n_features, dtype=np.float64)
@@ -1341,8 +1362,8 @@ class HProbe:
                         )
                         ans_vec = np.nan_to_num(cett_ans.numpy().astype(np.float32))
                         cett_raw.append(ans_vec)
-                        # As per AP-1: 1 if Incorrect (Hallucination), 0 if Correct
-                        train_labels.append(1 if not is_correct else 0)
+                        # Use custom label function or default hallucination labeling
+                        train_labels.append(label_fn(pred, gt, sample))
                         row_to_sample.append(sample_pos)
                         self._welford_update(ans_vec)
                     except Exception as e:
@@ -1441,7 +1462,7 @@ class HProbe:
                     )
                     ans_vec = np.nan_to_num(cett_ans.numpy().astype(np.float32))
                     cett_raw.append(ans_vec)
-                    train_labels.append(1 if not is_correct else 0)
+                    train_labels.append(label_fn(pred, gt, sample))
                     row_to_sample.append(sample_pos)
                     self._welford_update(ans_vec)
                 except Exception as e:
