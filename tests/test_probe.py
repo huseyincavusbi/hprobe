@@ -503,8 +503,10 @@ class TestLabelFn:
             assert probe.n_neurons_ >= 0
         except ValueError as e:
             # If all predictions are the same letter, sklearn will raise ValueError
-            # This is expected behavior for a control probe with uniform predictions
-            if "multiclass classification" in str(e) or "n_classes" in str(e):
+            # Python 3.10: "only one class"
+            # Python 3.11+: "multiclass classification"
+            error_msg = str(e).lower()
+            if "only one class" in error_msg or "multiclass" in error_msg:
                 pytest.skip(
                     "Mock model produces uniform predictions, cannot train binary classifier"
                 )
