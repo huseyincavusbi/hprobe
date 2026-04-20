@@ -40,7 +40,7 @@ jobs:
         run: uv sync --frozen --group dev
 
       - name: Run unit tests
-        run: uv run pytest hprobes/tests/test_cett.py hprobes/tests/test_cli.py hprobes/tests/test_probe.py -v --tb=short
+        run: uv run pytest tests/test_cett.py tests/test_cli.py tests/test_probe.py -v --tb=short
 
   integration-tests:
     runs-on: ubuntu-latest
@@ -72,4 +72,4 @@ jobs:
           uv pip install .
 
       - name: Run integration tests
-        run: uv run pytest hprobes/tests/test_integration.py -v --tb=short
+        run: uv run pytest tests/test_integration.py -v --tb=short
