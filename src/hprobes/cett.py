@@ -23,10 +23,10 @@ def _get_transformer_layers(model: torch.nn.Module):
     """Return the transformer layer list for any supported architecture.
 
     Handles:
-      - Standard causal LMs:  model.model.layers
-        (Gemma-3, Llama, Mistral)
-      - Multimodal wrappers:  model.model.language_model.layers
-        (MedGemma-4B-IT / Gemma3ForConditionalGeneration)
+      - Standard causal LMs:  model.model.layers (Gemma, Llama, Mistral)
+      - Multimodal wrappers:  model.model.language_model.layers (MedGemma)
+      - GPT-2:                model.transformer.h
+      - OPT:                  model.model.decoder.layers
     """
     # Multimodal: model.model.language_model.layers (MedGemma-4B-IT)
     if hasattr(model, "model") and hasattr(model.model, "language_model"):
@@ -36,21 +36,52 @@ def _get_transformer_layers(model: torch.nn.Module):
     # Standard causal LM: model.model.layers
     if hasattr(model, "model") and hasattr(model.model, "layers"):
         return model.model.layers
+    # GPT-2: model.transformer.h
+    if hasattr(model, "transformer") and hasattr(model.transformer, "h"):
+        return model.transformer.h
+    # OPT: model.model.decoder.layers
+    if (
+        hasattr(model, "model")
+        and hasattr(model.model, "decoder")
+        and hasattr(model.model.decoder, "layers")
+    ):
+        return model.model.decoder.layers
+
     raise ValueError(
         f"Unsupported architecture: {type(model).__name__}. "
-        "Expected model.model.layers or model.model.language_model.layers."
+        "Expected model.model.layers or model.transformer.h."
     )
 
 
 def get_mlp_down_proj(model: torch.nn.Module, layer_idx: int) -> torch.nn.Module:
-    """Return the down-projection linear layer for a given transformer layer index."""
+    """Return the down-projection linear layer for a given transformer layer index.
+
+    Supports:
+      - down_proj (Llama, Gemma, Mistral)
+      - c_proj (GPT2)
+      - fc2 (OPT)
+    """
     layers = _get_transformer_layers(model)
     if layer_idx >= len(layers):
         raise IndexError(f"Layer {layer_idx} out of range (model has {len(layers)} layers)")
     block = layers[layer_idx]
-    if hasattr(block, "mlp") and hasattr(block.mlp, "down_proj"):
-        return block.mlp.down_proj
-    raise ValueError(f"Cannot find down_proj in layer {layer_idx} of {type(model).__name__}")
+
+    # Handle various MLP layer names
+    if hasattr(block, "mlp"):
+        mlp = block.mlp
+        for name in ["down_proj", "c_proj", "fc2"]:
+            if hasattr(mlp, name):
+                return getattr(mlp, name)
+
+    # Some architectures might have it at the block level directly
+    for name in ["down_proj", "c_proj", "fc2"]:
+        if hasattr(block, name):
+            return getattr(block, name)
+
+    raise AttributeError(
+        f"Could not find MLP down-projection layer in {type(block).__name__}. "
+        "Checked: .mlp.down_proj, .mlp.c_proj, .mlp.fc2"
+    )
 
 
 def available_layers(model: torch.nn.Module) -> List[int]:
@@ -70,8 +101,13 @@ def precompute_col_norms(
     col_norms = {}
     for layer_idx in layers:
         down_proj = get_mlp_down_proj(model, layer_idx)
-        W = down_proj.weight.detach().float()  # (hidden_dim, intermediate_dim)
-        col_norms[layer_idx] = torch.norm(W, dim=0).cpu()  # (intermediate_dim,)
+        W = down_proj.weight.detach().float()  # (hidden_dim, intermediate_dim) usually
+
+        # GPT-2 uses Conv1D where weight is (intermediate_dim, hidden_dim)
+        if type(down_proj).__name__ == "Conv1D":
+            col_norms[layer_idx] = torch.norm(W, dim=1).cpu()  # (intermediate_dim,)
+        else:
+            col_norms[layer_idx] = torch.norm(W, dim=0).cpu()  # (intermediate_dim,)
     return col_norms
 
 
