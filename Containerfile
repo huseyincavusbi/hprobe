@@ -2,13 +2,15 @@ FROM nvidia/cuda:12.6.3-runtime-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1
+    UV_SYSTEM_PYTHON=1
+
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends python3 python3-pip && \
+    apt-get install -y --no-install-recommends python3 && \
     rm -rf /var/lib/apt/lists/*
 
-RUN pip3 install --no-cache-dir hprobes==0.4.0
+RUN uv pip install hprobes
 
 RUN mkdir /data /results
 WORKDIR /workspace
