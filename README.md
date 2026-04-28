@@ -72,3 +72,16 @@ probe.save("results/gemma_medqa")          # writes .json + .pkl
 probe = HProbe.load("results/gemma_medqa", model, tokenizer)
 probe.score_on(new_samples, options_key="choices", answer_key="answer")
 ```
+
+
+## Acknowledgements
+
+This research is conducted in collaboration with the
+[Great Ormond Street Hospital DRIVE Unit](https://www.gosh.nhs.uk/our-research/drive-unit-for-digital-innovation/).
+
+## Contributors
+
+- **Huseyin Cavus** — Core Contributor
+- **Dr. Pavithra Rajendran** — Machine Learning Lead, GOSH DRIVE
+- **Sebin Sabu** — Senior AI Scientist, GOSH DRIVE
+- **Jaskaran Singh Kawatra** — ML Engineer, GOSH DRIVE
