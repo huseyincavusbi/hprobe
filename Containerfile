@@ -10,8 +10,13 @@ RUN apt-get update && \
     apt-get install -y --no-install-recommends python3 python3-venv && \
     rm -rf /var/lib/apt/lists/*
 
-RUN uv venv /opt/venv && \
-    uv pip install --python /opt/venv/bin/python hprobes
+RUN uv venv /opt/venv
+
+WORKDIR /app
+COPY . .
+
+# Install local package
+RUN uv pip install .
 
 RUN mkdir /data /results
 WORKDIR /workspace
