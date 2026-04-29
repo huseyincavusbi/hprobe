@@ -3,4 +3,4 @@
 from .probe import HProbes
 
 __all__ = ["HProbes"]
-__version__ = "0.5.2"
+__version__ = "0.5.3"
