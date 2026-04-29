@@ -1,4 +1,4 @@
-FROM nvidia/cuda:12.6.3-runtime-ubuntu24.04
+FROM nvidia/cuda:12.8.0-runtime-ubuntu24.04
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
@@ -11,6 +11,9 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
 
 RUN uv venv /opt/venv
+
+# Install torch with CUDA 12 support explicitly to avoid version detection bugs
+RUN uv pip install torch==2.6.0 torchvision torchaudio --index-url https://download.pytorch.org/whl/cu126
 
 WORKDIR /app
 COPY . .
