@@ -1,4 +1,4 @@
-"""HProbe — toolkit for H-Neuron discovery and causal validation."""
+"""HProbes — toolkit for H-Neuron discovery and causal validation."""
 
 import logging
 import json
@@ -29,7 +29,7 @@ _NOT_FITTED_MSG = "Call fit() before using this method."
 _MCQ_LETTERS = list("ABCDEFGHIJ")
 
 
-class HProbe:
+class HProbes:
     """Discover and causally validate hallucination-associated FFN neurons in a transformer LLM.
 
     Implements the CETT metric to identify a sparse set of neurons whose activations
@@ -135,7 +135,7 @@ class HProbe:
         prompt_fn: Optional[Callable[[Dict], str]] = None,
         answer_cue: str = "\n\nAnswer:",
         label_fn: Optional[Callable[[str, str, Dict], int]] = None,
-    ) -> "HProbe":
+    ) -> "HProbes":
         """Discover H-Neurons from MCQ samples.
 
         Parameters
@@ -282,7 +282,7 @@ class HProbe:
         answer_tokens_key: str = "answer_tokens",
         label_key: str = "judge",
         aggregation: str = "mean",
-    ) -> "HProbe":
+    ) -> "HProbes":
         """Discover H-Neurons from pre-generated responses (3-vs-1 labeling).
 
         Feeds the full Q+A sequence, captures CETT over the answer token span,
@@ -597,7 +597,7 @@ class HProbe:
         self.cv_results_ = results
         return results
 
-    def compare_with(self, other: "HProbe") -> Dict[str, Any]:
+    def compare_with(self, other: "HProbes") -> Dict[str, Any]:
         """Compare H-Neurons with another fitted probe.
 
         Computes Jaccard similarity and overlap statistics between the H-Neuron
@@ -608,7 +608,7 @@ class HProbe:
 
         Parameters
         ----------
-        other : HProbe
+        other : HProbes
             Another fitted probe to compare against.
 
         Returns
@@ -629,8 +629,8 @@ class HProbe:
 
         Examples
         --------
-        >>> probe1 = HProbe(model, tok, l1_C=0.1).fit(samples)
-        >>> probe2 = HProbe(model, tok, l1_C=1.0).fit(samples)
+        >>> probe1 = HProbes(model, tok, l1_C=0.1).fit(samples)
+        >>> probe2 = HProbes(model, tok, l1_C=1.0).fit(samples)
         >>> comparison = probe1.compare_with(probe2)
         >>> print(f"Jaccard: {comparison['jaccard_similarity']:.3f}")
         >>> print(f"Shared: {comparison['n_shared']} neurons")
@@ -747,7 +747,7 @@ class HProbe:
         return json_path
 
     @classmethod
-    def load(cls, path: str, model: torch.nn.Module, tokenizer) -> "HProbe":
+    def load(cls, path: str, model: torch.nn.Module, tokenizer) -> "HProbes":
         """Load a saved probe classifier and attach it to a (possibly different) model.
 
         Use this to run transfer experiments: fit on an IT model, then load onto the
@@ -765,7 +765,7 @@ class HProbe:
 
         Returns
         -------
-        HProbe instance ready for score_on() or causal_validate().
+        HProbes instance ready for score_on() or causal_validate().
         """
         sf_path = Path(path).with_suffix(".safetensors")
         json_path = Path(path).with_suffix(".json")

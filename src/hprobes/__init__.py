@@ -1,6 +1,6 @@
 """hprobes — Hallucination neuron discovery and causal validation for transformer LLMs."""
 
-from .probe import HProbe
+from .probe import HProbes
 
-__all__ = ["HProbe"]
+__all__ = ["HProbes"]
 __version__ = "0.5.0"

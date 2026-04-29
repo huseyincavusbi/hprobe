@@ -202,7 +202,7 @@ def _print_score(results):
 
 
 def cmd_run(args: argparse.Namespace) -> None:
-    from hprobes import HProbe, __version__
+    from hprobes import HProbes, __version__
 
     sep = "─" * 68
     print(
@@ -232,7 +232,7 @@ def cmd_run(args: argparse.Namespace) -> None:
     alphas = [float(a) for a in args.alphas.split(",")] if args.alphas else None
 
     print(f"  Fitting (l1_C={args.l1_c})...", end="", flush=True)
-    probe = HProbe(
+    probe = HProbes(
         model,
         tokenizer,
         l1_C=args.l1_c,
@@ -273,7 +273,7 @@ def cmd_run(args: argparse.Namespace) -> None:
 
 
 def cmd_responses(args: argparse.Namespace) -> None:
-    from hprobes import HProbe, __version__
+    from hprobes import HProbes, __version__
 
     sep = "─" * 68
     print(
@@ -297,7 +297,7 @@ def cmd_responses(args: argparse.Namespace) -> None:
     alphas = [float(a) for a in args.alphas.split(",")] if args.alphas else None
 
     print(f"  Fitting (l1_C={args.l1_c})...", end="", flush=True)
-    probe = HProbe(
+    probe = HProbes(
         model,
         tokenizer,
         l1_C=args.l1_c,
@@ -344,7 +344,7 @@ def cmd_responses(args: argparse.Namespace) -> None:
 
 
 def cmd_transfer(args: argparse.Namespace) -> None:
-    from hprobes import HProbe, __version__
+    from hprobes import HProbes, __version__
 
     sep = "─" * 68
     print(f"\nhprobes v{__version__}  |  transfer: {args.probe} → {args.model}")
@@ -361,7 +361,7 @@ def cmd_transfer(args: argparse.Namespace) -> None:
     print(" done")
 
     print(f"  Loading probe from {args.probe}...", end="", flush=True)
-    probe = HProbe.load(args.probe, model, tokenizer)
+    probe = HProbes.load(args.probe, model, tokenizer)
     print(f" done  ({probe.n_neurons_} H-Neurons)")
 
     print("\n  Scoring (transfer)...")
