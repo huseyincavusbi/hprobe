@@ -128,6 +128,7 @@ class TestForwardCett:
     def test_output_shapes(self):
         cett, logits = forward_cett(M, _tok(), self.layers, self.norms)
         assert cett.shape == (len(self.layers) * _I,)
+        assert (cett >= 0).all()  # Verify abs(z) fix
         assert logits.shape == (_V,)
 
     def test_last_token_equals_explicit(self):
