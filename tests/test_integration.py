@@ -4,7 +4,7 @@ import tempfile
 import os
 import pytest
 from transformers import AutoModelForCausalLM, AutoTokenizer
-from hprobes import HProbe
+from hprobes import HProbes
 
 
 @pytest.fixture(scope="module")
@@ -20,14 +20,14 @@ def gpt2_setup():
 def test_full_pipeline_with_gpt2(gpt2_setup):
     """
     Integration test using official GPT2 to verify:
-    1. HProbe initialization
+    1. HProbes initialization
     2. fit() workflow (partial)
     3. Save/Load round-trip
     """
     model, tokenizer = gpt2_setup
 
     # Initialize probe
-    probe = HProbe(model, tokenizer, layer_stride=2)
+    probe = HProbes(model, tokenizer, layer_stride=2)
 
     # Tiny dataset in MedQA format (dict options + letter answer)
     samples = [
@@ -40,7 +40,7 @@ def test_full_pipeline_with_gpt2(gpt2_setup):
     ]
 
     # Run fit
-    # Note: HProbe.fit() expects options_key and answer_key for medqa
+    # Note: HProbes.fit() expects options_key and answer_key for medqa
     probe.fit(samples, options_key="options", answer_key="answer_idx")
 
     assert probe.is_fitted_
@@ -52,7 +52,7 @@ def test_full_pipeline_with_gpt2(gpt2_setup):
     try:
         probe.save(tmp_path)
         # Load back
-        new_probe = HProbe.load(tmp_path, model, tokenizer)
+        new_probe = HProbes.load(tmp_path, model, tokenizer)
 
         # Verify fitted state and parameters match
         assert new_probe.is_fitted_
@@ -84,12 +84,16 @@ def test_cli_run_command(gpt2_setup):
     # hprobes run creates <output>.json and <output>.pkl (or similar)
     output_base = "integration_test_output"
 
+    import sys
+
     try:
         # Run CLI via subprocess
         # Note: CLI uses --samples instead of --n
         result = subprocess.run(
             [
-                "hprobes",
+                sys.executable,
+                "-m",
+                "hprobes.cli",
                 "run",
                 "--model",
                 "openai-community/gpt2",

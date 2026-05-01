@@ -1,4 +1,4 @@
-"""Tests for hprobes.probe — HProbe class."""
+"""Tests for hprobes.probe — HProbes class."""
 
 import json
 import tempfile
@@ -9,7 +9,7 @@ import pytest
 import torch
 import torch.nn as nn
 
-from hprobes import HProbe
+from hprobes import HProbes
 
 # ---------------------------------------------------------------------------
 # Minimal mock model + tokenizer
@@ -116,7 +116,7 @@ SAMPLES = [
 ]
 
 # Fitted probe shared across tests in this module
-_PROBE = HProbe(MODEL, TOK, l1_C=0.5)
+_PROBE = HProbes(MODEL, TOK, l1_C=0.5)
 _PROBE.fit(SAMPLES, options_key="options", answer_key="answer")
 
 
@@ -164,7 +164,7 @@ class TestPredictLetter:
 
 class TestWelfordUpdate:
     def test_mean_converges(self):
-        p = HProbe(MODEL, TOK)
+        p = HProbes(MODEL, TOK)
         p._welford_n = 0
         p._welford_mean = np.zeros(8, dtype=np.float64)
         p._welford_M2 = np.zeros(8, dtype=np.float64)
@@ -178,11 +178,11 @@ class TestWelfordUpdate:
 class TestNotFittedErrors:
     def test_score_raises(self):
         with pytest.raises(RuntimeError):
-            HProbe(MODEL, TOK).score()
+            HProbes(MODEL, TOK).score()
 
     def test_causal_validate_raises(self):
         with pytest.raises(RuntimeError):
-            HProbe(MODEL, TOK).causal_validate()
+            HProbes(MODEL, TOK).causal_validate()
 
 
 class TestFitAndScore:
@@ -203,7 +203,7 @@ class TestFitAndScore:
         assert all(0.0 <= v <= 1.0 for v in result.values())
 
     def test_contrastive_mode(self):
-        p = HProbe(MODEL, TOK, l1_C=0.5)
+        p = HProbes(MODEL, TOK, l1_C=0.5)
         p.fit(SAMPLES, options_key="options", answer_key="answer")
         assert p.is_fitted_
 
@@ -212,7 +212,7 @@ class TestFitAndScore:
             {"question": f"Q{i}?", "choices": ["a", "b", "c", "d"], "answer": i % 2}
             for i in range(20)
         ]
-        p = HProbe(MODEL, TOK, l1_C=0.5)
+        p = HProbes(MODEL, TOK, l1_C=0.5)
         p.fit(samples, options_key="choices", answer_key="answer")
         assert p.is_fitted_
 
@@ -226,7 +226,7 @@ class TestFitAndScore:
             }
             for i in range(20)
         ]
-        p = HProbe(MODEL, TOK, l1_C=0.5)
+        p = HProbes(MODEL, TOK, l1_C=0.5)
         p.fit_from_responses(samples)
         assert p.is_fitted_
 
@@ -245,20 +245,20 @@ class TestSaveLoadTransfer:
         with tempfile.TemporaryDirectory() as tmp:
             base = str(Path(tmp) / "probe")
             _PROBE.save(base)
-            loaded = HProbe.load(base, MODEL, TOK)
+            loaded = HProbes.load(base, MODEL, TOK)
             assert loaded.is_fitted_
             assert loaded.n_neurons_ == _PROBE.n_neurons_
             assert loaded.h_neurons_ == _PROBE.h_neurons_
 
     def test_load_missing_file_raises(self):
         with pytest.raises(FileNotFoundError):
-            HProbe.load("/nonexistent/probe", MODEL, TOK)
+            HProbes.load("/nonexistent/probe", MODEL, TOK)
 
     def test_score_on_returns_dict(self):
         with tempfile.TemporaryDirectory() as tmp:
             base = str(Path(tmp) / "probe")
             _PROBE.save(base)
-            loaded = HProbe.load(base, MODEL, TOK)
+            loaded = HProbes.load(base, MODEL, TOK)
             result = loaded.score_on(SAMPLES, options_key="options", answer_key="answer")
             assert "auroc" in result
             assert "balanced_accuracy" in result
@@ -266,7 +266,7 @@ class TestSaveLoadTransfer:
 
 class TestThreshold:
     def test_default_before_score(self):
-        p = HProbe(MODEL, TOK, l1_C=0.5)
+        p = HProbes(MODEL, TOK, l1_C=0.5)
         assert p.threshold_ == 0.5
 
     def test_set_after_score(self):
@@ -285,7 +285,7 @@ class TestThreshold:
             _PROBE.score()
             expected = _PROBE.threshold_
             _PROBE.save(base)
-            loaded = HProbe.load(base, MODEL, TOK)
+            loaded = HProbes.load(base, MODEL, TOK)
             assert loaded.threshold_ == expected
 
 
@@ -298,7 +298,7 @@ class TestDetect:
 
     def test_raises_if_not_fitted(self):
         with pytest.raises(RuntimeError):
-            HProbe(MODEL, TOK).detect("some prompt")
+            HProbes(MODEL, TOK).detect("some prompt")
 
     def test_with_answer_letter_provided(self):
         prompt = "Q0? Options: A) alpha B) beta\n\nAnswer:"
@@ -312,13 +312,13 @@ class TestDetect:
         assert abs(score_lower - score_upper) < 1e-6
 
     def test_invalid_answer_letter_raises(self):
-        probe = HProbe(MODEL, TOK, l1_C=0.5)
+        probe = HProbes(MODEL, TOK, l1_C=0.5)
         probe.fit(SAMPLES, options_key="options", answer_key="answer")
         with pytest.raises(ValueError):
             probe.detect("some prompt", answer_letter="Z")
 
     def test_non_contrastive_detect(self):
-        p = HProbe(MODEL, TOK, l1_C=0.5)
+        p = HProbes(MODEL, TOK, l1_C=0.5)
         p.fit(SAMPLES, options_key="options", answer_key="answer")
         score = p.detect("Q0? Options: A) alpha B) beta\n\nAnswer:")
         assert 0.0 <= score <= 1.0
@@ -341,7 +341,7 @@ class TestDetectBatch:
 
     def test_raises_if_not_fitted(self):
         with pytest.raises(RuntimeError):
-            HProbe(MODEL, TOK).detect_batch(["prompt"])
+            HProbes(MODEL, TOK).detect_batch(["prompt"])
 
     def test_with_answer_letters_provided(self):
         prompts = self._prompts(4)
@@ -358,7 +358,7 @@ class TestDetectBatch:
         assert abs(batch_score - single_score) < 1e-5
 
     def test_non_contrastive_batch(self):
-        p = HProbe(MODEL, TOK, l1_C=0.5)
+        p = HProbes(MODEL, TOK, l1_C=0.5)
         p.fit(SAMPLES, options_key="options", answer_key="answer")
         scores = p.detect_batch(self._prompts(4), batch_size=2)
         assert len(scores) == 4
@@ -367,28 +367,28 @@ class TestDetectBatch:
 
 class TestConsistencyFilter:
     def test_default_n_consistency_is_1(self):
-        assert HProbe(MODEL, TOK).n_consistency == 1
+        assert HProbes(MODEL, TOK).n_consistency == 1
 
     def test_fit_with_n_consistency(self):
-        p = HProbe(MODEL, TOK, l1_C=0.5, n_consistency=3)
+        p = HProbes(MODEL, TOK, l1_C=0.5, n_consistency=3)
         p.fit(SAMPLES, options_key="options", answer_key="answer")
         assert p.is_fitted_
 
     def test_n_consistency_persisted_in_save_load(self):
         with tempfile.TemporaryDirectory() as tmp:
             base = str(Path(tmp) / "probe")
-            p = HProbe(MODEL, TOK, l1_C=0.5, n_consistency=5)
+            p = HProbes(MODEL, TOK, l1_C=0.5, n_consistency=5)
             p.fit(SAMPLES, options_key="options", answer_key="answer")
             p.save(base)
-            loaded = HProbe.load(base, MODEL, TOK)
+            loaded = HProbes.load(base, MODEL, TOK)
             assert loaded.n_consistency == 5
 
 
 class TestCompareWith:
     def test_compare_with_returns_dict(self):
-        p1 = HProbe(MODEL, TOK, l1_C=0.5)
+        p1 = HProbes(MODEL, TOK, l1_C=0.5)
         p1.fit(SAMPLES, options_key="options", answer_key="answer")
-        p2 = HProbe(MODEL, TOK, l1_C=1.0)
+        p2 = HProbes(MODEL, TOK, l1_C=1.0)
         p2.fit(SAMPLES, options_key="options", answer_key="answer")
 
         result = p1.compare_with(p2)
@@ -401,16 +401,16 @@ class TestCompareWith:
         assert "shared_neurons" in result
 
     def test_jaccard_similarity_in_range(self):
-        p1 = HProbe(MODEL, TOK, l1_C=0.5)
+        p1 = HProbes(MODEL, TOK, l1_C=0.5)
         p1.fit(SAMPLES, options_key="options", answer_key="answer")
-        p2 = HProbe(MODEL, TOK, l1_C=1.0)
+        p2 = HProbes(MODEL, TOK, l1_C=1.0)
         p2.fit(SAMPLES, options_key="options", answer_key="answer")
 
         result = p1.compare_with(p2)
         assert 0.0 <= result["jaccard_similarity"] <= 1.0
 
     def test_identical_probes_have_jaccard_one(self):
-        p1 = HProbe(MODEL, TOK, l1_C=0.5)
+        p1 = HProbes(MODEL, TOK, l1_C=0.5)
         p1.fit(SAMPLES, options_key="options", answer_key="answer")
 
         result = p1.compare_with(p1)
@@ -425,17 +425,17 @@ class TestCompareWith:
             assert result["jaccard_similarity"] == 0.0
 
     def test_compare_with_unfitted_raises(self):
-        p1 = HProbe(MODEL, TOK, l1_C=0.5)
+        p1 = HProbes(MODEL, TOK, l1_C=0.5)
         p1.fit(SAMPLES, options_key="options", answer_key="answer")
-        p2 = HProbe(MODEL, TOK, l1_C=1.0)
+        p2 = HProbes(MODEL, TOK, l1_C=1.0)
 
         with pytest.raises(RuntimeError, match="must be fitted"):
             p1.compare_with(p2)
 
     def test_shared_neurons_are_tuples(self):
-        p1 = HProbe(MODEL, TOK, l1_C=0.5)
+        p1 = HProbes(MODEL, TOK, l1_C=0.5)
         p1.fit(SAMPLES, options_key="options", answer_key="answer")
-        p2 = HProbe(MODEL, TOK, l1_C=1.0)
+        p2 = HProbes(MODEL, TOK, l1_C=1.0)
         p2.fit(SAMPLES, options_key="options", answer_key="answer")
 
         result = p1.compare_with(p2)
@@ -487,7 +487,7 @@ class TestLabelFn:
 
     def test_answer_letter_control(self):
         """Test control probe that predicts answer letter A vs not-A."""
-        probe = HProbe(MODEL, TOK, batch_size=1, l1_C=0.5)
+        probe = HProbes(MODEL, TOK, batch_size=1, l1_C=0.5)
 
         # Label function: 1 if predicted answer is "A", 0 otherwise
         # Note: This test verifies the label_fn parameter works, even if
@@ -520,7 +520,7 @@ class TestLabelFn:
             for i, s in enumerate(SAMPLES)
         ]
 
-        probe = HProbe(MODEL, TOK, batch_size=1, l1_C=0.5)
+        probe = HProbes(MODEL, TOK, batch_size=1, l1_C=0.5)
 
         # Label function: 1 if subject is Anatomy, 0 otherwise
         probe.fit(
@@ -535,10 +535,10 @@ class TestLabelFn:
 
     def test_default_behavior_unchanged(self):
         """Test that default behavior (no label_fn) still works as hallucination probe."""
-        probe_default = HProbe(MODEL, TOK, batch_size=1, l1_C=0.5)
+        probe_default = HProbes(MODEL, TOK, batch_size=1, l1_C=0.5)
         probe_default.fit(SAMPLES, options_key="options", answer_key="answer")
 
-        probe_explicit = HProbe(MODEL, TOK, batch_size=1, l1_C=0.5)
+        probe_explicit = HProbes(MODEL, TOK, batch_size=1, l1_C=0.5)
         probe_explicit.fit(
             SAMPLES,
             options_key="options",
@@ -552,7 +552,7 @@ class TestLabelFn:
 
     def test_inverted_labeling(self):
         """Test inverted labeling: correct=1, incorrect=0."""
-        probe = HProbe(MODEL, TOK, batch_size=1, l1_C=0.5)
+        probe = HProbes(MODEL, TOK, batch_size=1, l1_C=0.5)
 
         # Inverted: 1 if correct, 0 if incorrect
         probe.fit(
