@@ -1369,34 +1369,16 @@ class HProbes:
                     except Exception as e:
                         logging.warning(f"Error extracting decision CETT: {e}")
 
-                # 2. Prompt Tokens (3 Negative Controls per the paper's 3-vs-1 ratio)
-                try:
-                    # cett_matrix[i] is already the last prompt token from the batch pass
-                    last_prompt_vec = np.nan_to_num(cett_matrix[i].numpy().astype(np.float32))
-                    cett_raw.append(last_prompt_vec)
-                    train_labels.append(0)
-                    row_to_sample.append(sample_pos)
-                    self._welford_update(last_prompt_vec)
-
-                    # Extract 2 more tokens for the 3-vs-1 ratio
-                    sample_tokens = self._tokenize(prompt)
-                    seq_len = sample_tokens["input_ids"].shape[1]
-                    for pos in [-2, -3]:
-                        if abs(pos) <= seq_len:
-                            c_vec, _ = forward_cett(
-                                self.model,
-                                sample_tokens,
-                                self._layers,
-                                self._col_norms,
-                                token_position=pos,
-                            )
-                            neg_vec = np.nan_to_num(c_vec.numpy().astype(np.float32))
-                            cett_raw.append(neg_vec)
-                            train_labels.append(0)
-                            row_to_sample.append(sample_pos)
-                            self._welford_update(neg_vec)
-                except Exception as e:
-                    logging.warning(f"Error extracting prompt controls in batch: {e}")
+                    # 2. Prompt Token (1 Negative Control per the paper's 3-vs-1 ratio)
+                    try:
+                        # cett_matrix[i] is already the last prompt token from the batch pass
+                        last_prompt_vec = np.nan_to_num(cett_matrix[i].numpy().astype(np.float32))
+                        cett_raw.append(last_prompt_vec)
+                        train_labels.append(0)
+                        row_to_sample.append(sample_pos)
+                        self._welford_update(last_prompt_vec)
+                    except Exception as e:
+                        logging.warning(f"Error extracting prompt control in batch: {e}")
 
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
@@ -1468,21 +1450,29 @@ class HProbes:
                 except Exception as e:
                     logging.warning(f"Error extracting decision CETT: {e}")
 
-            # 2. Prompt Tokens (3 Negative Controls per the paper's 3-vs-1 ratio)
+            # 2. Prompt Tokens (Aggregate mean CETT over entire prompt as Negative Control)
             try:
+                # Get CETT for the whole prompt span
                 seq_len = tokens["input_ids"].shape[1]
-                for pos in [-1, -2, -3]:
-                    if abs(pos) <= seq_len:
-                        c_vec, _ = forward_cett(
-                            self.model, tokens, self._layers, self._col_norms, token_position=pos
-                        )
-                        neg_vec = np.nan_to_num(c_vec.numpy().astype(np.float32))
-                        cett_raw.append(neg_vec)
-                        train_labels.append(0)
-                        row_to_sample.append(sample_pos)
-                        self._welford_update(neg_vec)
+                # forward_cett_span expects a span (start, end)
+                # tokens is the prompt + answer_cue
+                # span is 0 to seq_len
+                neg_vec_torch = forward_cett_span(
+                    self.model,
+                    tokens,
+                    0,
+                    seq_len,
+                    self._layers,
+                    self._col_norms,
+                    aggregation="mean",
+                )
+                neg_vec = np.nan_to_num(neg_vec_torch.numpy().astype(np.float32))
+                cett_raw.append(neg_vec)
+                train_labels.append(0)
+                row_to_sample.append(sample_pos)
+                self._welford_update(neg_vec)
             except Exception as e:
-                logging.warning(f"Error extracting prompt controls: {e}")
+                logging.warning(f"Error extracting prompt control aggregate: {e}")
 
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
