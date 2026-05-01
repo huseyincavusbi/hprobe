@@ -166,7 +166,7 @@ def forward_cett(
         z = z_cache[layer_idx]
         h = h_cache[layer_idx]
         h_norm = torch.norm(h).item() + 1e-8
-        cett = (z * col_norms[layer_idx]) / h_norm
+        cett = (torch.abs(z) * col_norms[layer_idx]) / h_norm
         cett_parts.append(cett)
 
     return torch.cat(cett_parts, dim=0), logits
@@ -180,9 +180,6 @@ def forward_cett_at_token(
     col_norms: Dict[int, torch.Tensor],
 ) -> torch.Tensor:
     """Append one token to the input and capture CETT at that appended position.
-
-    Used by contrastive mode: appends the predicted answer token (A/B/C/D)
-    and captures CETT specifically when the model is generating that token.
 
     Returns
     -------
@@ -226,7 +223,7 @@ def forward_cett_at_token(
     cett_parts = []
     for layer_idx in layers:
         h_norm = torch.norm(h_cache[layer_idx]).item() + 1e-8
-        cett = (z_cache[layer_idx] * col_norms[layer_idx]) / h_norm
+        cett = (torch.abs(z_cache[layer_idx]) * col_norms[layer_idx]) / h_norm
         cett_parts.append(cett)
 
     return torch.cat(cett_parts, dim=0)
@@ -241,22 +238,7 @@ def forward_cett_span(
     col_norms: Dict[int, torch.Tensor],
     aggregation: str = "mean",
 ) -> torch.Tensor:
-    """Forward pass over a full sequence — extract CETT aggregated over a token span.
-
-    Used by fit_from_responses(): feeds the full Q+A sequence and captures
-    CETT over the answer token span, then aggregates with mean or max.
-
-    Parameters
-    ----------
-    tokens : tokenizer output for the full Q+A sequence
-    span_start : start index of the answer token span (inclusive)
-    span_end   : end index of the answer token span (exclusive)
-    aggregation : "mean" or "max" over the span
-
-    Returns
-    -------
-    cett_vec : (n_layers * intermediate_dim,) float32
-    """
+    """Forward pass over a full sequence — extract CETT aggregated over a token span."""
     z_cache: Dict[int, torch.Tensor] = {}
     h_cache: Dict[int, torch.Tensor] = {}
     handles = []
@@ -266,7 +248,6 @@ def forward_cett_span(
 
         def make_hook(idx: int):
             def hook(module, input, output):
-                # capture full sequence: [seq_len, intermediate_dim]
                 z_cache[idx] = input[0][0].detach().float().cpu()
                 h_cache[idx] = output[0].detach().float().cpu()
                 return output
@@ -284,12 +265,10 @@ def forward_cett_span(
 
     cett_parts = []
     for layer_idx in layers:
-        z_span = z_cache[layer_idx][span_start:span_end]  # [span_len, intermediate_dim]
-        h_span = h_cache[layer_idx][span_start:span_end]  # [span_len, hidden_dim]
-        h_norms = torch.norm(h_span, dim=-1, keepdim=True) + 1e-8  # [span_len, 1]
-        cett_span = (
-            torch.abs(z_span) * col_norms[layer_idx].unsqueeze(0)
-        ) / h_norms  # [span_len, inter_dim]
+        z_span = z_cache[layer_idx][span_start:span_end]
+        h_span = h_cache[layer_idx][span_start:span_end]
+        h_norms = torch.norm(h_span, dim=-1, keepdim=True) + 1e-8
+        cett_span = (torch.abs(z_span) * col_norms[layer_idx].unsqueeze(0)) / h_norms
         if aggregation == "max":
             cett_agg = cett_span.max(dim=0).values
         else:
@@ -306,18 +285,7 @@ def forward_cett_batch(
     col_norms: Dict[int, torch.Tensor],
     token_positions: List[int],
 ) -> Tuple[torch.Tensor, torch.Tensor]:
-    """Batched forward pass — extract CETT for each sample at its token position.
-
-    Parameters
-    ----------
-    batch_tokens : tokenizer output with batch_size > 1 (must be right-padded)
-    token_positions : last real token position per sample (index into padded seq)
-
-    Returns
-    -------
-    cett_matrix : (batch_size, n_layers * intermediate_dim) float32
-    logits_matrix : (batch_size, vocab_size) float32
-    """
+    """Batched forward pass — extract CETT for each sample."""
     batch_size = batch_tokens["input_ids"].shape[0]
     device = batch_tokens["input_ids"].device
     batch_idx = torch.arange(batch_size, device=device)
@@ -332,16 +300,14 @@ def forward_cett_batch(
 
         def make_hook(idx: int):
             def hook(module, input, output):
-                # Slice to needed positions on GPU — avoids copying full (B, T, D) off-device
-                z_cache[idx] = input[0][batch_idx, token_pos_t].detach().float()  # (B, D)
-                h_cache[idx] = output[batch_idx, token_pos_t].detach().float()  # (B, D)
+                z_cache[idx] = input[0][batch_idx, token_pos_t].detach().float()
+                h_cache[idx] = output[batch_idx, token_pos_t].detach().float()
                 return output
 
             return hook
 
         handles.append(down_proj.register_forward_hook(make_hook(layer_idx)))
 
-    # Compute position_ids so real tokens get 0-based positions regardless of left-padding
     if "attention_mask" in batch_tokens:
         position_ids = (batch_tokens["attention_mask"].cumsum(dim=-1) - 1).clamp(min=0)
     else:
@@ -355,16 +321,15 @@ def forward_cett_batch(
         for h in handles:
             h.remove()
 
-    logits_matrix = out.logits[batch_idx, token_pos_t].detach().float().cpu()  # (B, vocab)
+    logits_matrix = out.logits[batch_idx, token_pos_t].detach().float().cpu()
 
-    # Vectorized CETT on GPU: stack all layers then compute in one shot
-    z_all = torch.stack([z_cache[li] for li in layers], dim=0)  # (L, B, D)
-    h_all = torch.stack([h_cache[li] for li in layers], dim=0)  # (L, B, D)
-    col_norms_gpu = torch.stack([col_norms[li].to(device) for li in layers])  # (L, D)
+    z_all = torch.stack([z_cache[li] for li in layers], dim=0)
+    h_all = torch.stack([h_cache[li] for li in layers], dim=0)
+    col_norms_gpu = torch.stack([col_norms[li].to(device) for li in layers])
 
-    h_norm = torch.norm(h_all, dim=-1, keepdim=True) + 1e-8  # (L, B, 1)
-    cett = (z_all * col_norms_gpu.unsqueeze(1)) / h_norm  # (L, B, D)
-    cett_matrix = cett.permute(1, 0, 2).reshape(batch_size, -1).cpu()  # (B, L*D)
+    h_norm = torch.norm(h_all, dim=-1, keepdim=True) + 1e-8
+    cett = (torch.abs(z_all) * col_norms_gpu.unsqueeze(1)) / h_norm
+    cett_matrix = cett.permute(1, 0, 2).reshape(batch_size, -1).cpu()
 
     return cett_matrix, logits_matrix
 
@@ -376,18 +341,7 @@ def forward_cett_at_token_batch(
     layers: List[int],
     col_norms: Dict[int, torch.Tensor],
 ) -> torch.Tensor:
-    """Batched version of forward_cett_at_token.
-
-    Appends one answer token per sample and captures CETT at the last position.
-
-    Parameters
-    ----------
-    extra_token_ids : answer token id per sample
-
-    Returns
-    -------
-    cett_matrix : (batch_size, n_layers * intermediate_dim) float32
-    """
+    """Batched version of forward_cett_at_token."""
     batch_size = batch_tokens["input_ids"].shape[0]
     device = batch_tokens["input_ids"].device
 
@@ -410,9 +364,8 @@ def forward_cett_at_token_batch(
 
         def make_hook(idx: int):
             def hook(module, input, output):
-                # Slice last position on GPU — avoids copying full (B, T, D) off-device
-                z_cache[idx] = input[0][:, -1, :].detach().float()  # (B, D)
-                h_cache[idx] = output[:, -1, :].detach().float()  # (B, D)
+                z_cache[idx] = input[0][:, -1, :].detach().float()
+                h_cache[idx] = output[:, -1, :].detach().float()
                 return output
 
             return hook
@@ -432,14 +385,13 @@ def forward_cett_at_token_batch(
         for h in handles:
             h.remove()
 
-    # Vectorized CETT on GPU
-    z_all = torch.stack([z_cache[li] for li in layers], dim=0)  # (L, B, D)
-    h_all = torch.stack([h_cache[li] for li in layers], dim=0)  # (L, B, D)
-    col_norms_gpu = torch.stack([col_norms[li].to(device) for li in layers])  # (L, D)
+    z_all = torch.stack([z_cache[li] for li in layers], dim=0)
+    h_all = torch.stack([h_cache[li] for li in layers], dim=0)
+    col_norms_gpu = torch.stack([col_norms[li].to(device) for li in layers])
 
-    h_norm = torch.norm(h_all, dim=-1, keepdim=True) + 1e-8  # (L, B, 1)
-    cett = (z_all * col_norms_gpu.unsqueeze(1)) / h_norm  # (L, B, D)
-    cett_matrix = cett.permute(1, 0, 2).reshape(batch_size, -1).cpu()  # (B, L*D)
+    h_norm = torch.norm(h_all, dim=-1, keepdim=True) + 1e-8
+    cett = (torch.abs(z_all) * col_norms_gpu.unsqueeze(1)) / h_norm
+    cett_matrix = cett.permute(1, 0, 2).reshape(batch_size, -1).cpu()
 
     return cett_matrix
 
@@ -451,12 +403,7 @@ def scale_h_neurons(
     alpha: float,
     layers: List[int],
 ) -> torch.Tensor:
-    """Forward pass scaling H-Neuron activations by alpha (causal intervention).
-
-    alpha < 1 suppresses, alpha = 1 is baseline, alpha > 1 amplifies.
-
-    Returns logits (vocab_size,) at the last token.
-    """
+    """Forward pass scaling H-Neuron activations by alpha."""
     neurons_by_layer: Dict[int, List[int]] = {}
     for layer_idx, neuron_idx in h_neurons:
         neurons_by_layer.setdefault(layer_idx, []).append(neuron_idx)
