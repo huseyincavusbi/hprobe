@@ -47,7 +47,7 @@ nav:
     - Production Scoring: guide/production.md
     - CLI Reference: guide/cli.md
   - API Reference:
-    - HProbe: api/probe.md
+    - HProbes: api/probe.md
     - CETT Functions: api/cett.md
 
 markdown_extensions:

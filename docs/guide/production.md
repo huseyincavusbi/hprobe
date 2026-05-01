@@ -59,7 +59,7 @@ The threshold is persisted through `save()`/`load()`:
 
 ```python
 probe.save("results/probe")
-loaded = HProbe.load("results/probe", model, tokenizer)
+loaded = HProbes.load("results/probe", model, tokenizer)
 print(loaded.threshold_)  # same value
 ```
 
@@ -71,7 +71,7 @@ print(loaded.threshold_)  # same value
 Enable consistency filtering during `fit()` to skip ambiguous samples:
 
 ```python
-probe = HProbe(model, tokenizer, n_consistency=10)
+probe = HProbes(model, tokenizer, n_consistency=10)
 probe.fit(samples, options_key="choices", answer_key="answer")
 ```
 
@@ -90,8 +90,8 @@ This filters out noisy training samples where the model's prediction is unstable
 probe.save("production/medqa_probe")
 
 # Later, in your serving pipeline
-from hprobes import HProbe
-probe = HProbe.load("production/medqa_probe", model, tokenizer)
+from hprobes import HProbes
+probe = HProbes.load("production/medqa_probe", model, tokenizer)
 
 # Score incoming requests
 for request in incoming:

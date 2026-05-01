@@ -1,6 +1,6 @@
 # CETT Functions
 
-Low-level CETT extraction and causal intervention utilities. These are used internally by `HProbe` but are also available for custom pipelines.
+Low-level CETT extraction and causal intervention utilities. These are used internally by `HProbes` but are also available for custom pipelines.
 
 ::: hprobes.cett.available_layers
 

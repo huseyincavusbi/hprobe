@@ -30,7 +30,7 @@ uv sync --dev
 ## Verification
 
 ```python
-from hprobes import HProbe
+from hprobes import HProbes
 print("hprobes imported successfully")
 ```
 

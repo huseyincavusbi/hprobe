@@ -4,7 +4,7 @@
 
 ```python
 from transformers import AutoModelForCausalLM, AutoTokenizer
-from hprobes import HProbe
+from hprobes import HProbes
 
 model = AutoModelForCausalLM.from_pretrained(
     "google/gemma-3-4b-it",
@@ -14,7 +14,7 @@ model = AutoModelForCausalLM.from_pretrained(
 tokenizer = AutoTokenizer.from_pretrained("google/gemma-3-4b-it")
 
 # samples: list of dicts with question, options (dict or list), and answer
-probe = HProbe(model, tokenizer, l1_C=0.01)
+probe = HProbes(model, tokenizer, l1_C=0.01)
 probe.fit(samples, options_key="choices", answer_key="answer")
 
 print(f"H-Neurons found: {probe.n_neurons_}")
@@ -54,7 +54,7 @@ scores = probe.detect_batch(prompts, batch_size=8)
 
 ```python
 probe.save("results/gemma_medqa")          # writes .json + .pkl
-probe = HProbe.load("results/gemma_medqa", model, tokenizer)
+probe = HProbes.load("results/gemma_medqa", model, tokenizer)
 
 # Score on a new dataset with the loaded probe
 probe.score_on(new_samples, options_key="choices", answer_key="answer")
