@@ -23,12 +23,12 @@ uv add hprobes
 
 ```python
 from transformers import AutoModelForCausalLM, AutoTokenizer
-from hprobes import HProbe
+from hprobes import HProbes
 
 model = AutoModelForCausalLM.from_pretrained("google/gemma-3-4b-it", torch_dtype="auto", device_map="auto")
 tokenizer = AutoTokenizer.from_pretrained("google/gemma-3-4b-it")
 
-probe = HProbe(model, tokenizer)
+probe = HProbes(model, tokenizer)
 probe.fit(samples, options_key="choices", answer_key="answer")
 
 results = probe.score()
