@@ -241,6 +241,7 @@ def cmd_run(args: argparse.Namespace) -> None:
         seed=args.seed,
         max_tokens=args.max_tokens,
         batch_size=args.batch_size,
+        top_k=args.top_k,
     )
     probe.fit(samples, options_key=options_key, answer_key=answer_key)
     probe.model_id = args.model
@@ -498,6 +499,13 @@ def _add_common_probe_args(p):
         "--alphas",
         default=None,
         help="Comma-separated alpha values for causal validation (default: 0.0,0.5,1.0,1.5,2.0)",
+    )
+    p.add_argument(
+        "--top-k",
+        type=int,
+        default=5000,
+        dest="top_k",
+        help="Variance pre-selection: keep top-K features (default: 5000). Set to 0 to use all features.",
     )
     p.add_argument(
         "--batch-size",

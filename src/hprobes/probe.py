@@ -78,10 +78,12 @@ class HProbes:
         max_tokens: int = 1024,
         batch_size: int = 1,
         n_consistency: int = 1,
+        top_k: int = 5000,
     ):
         self.model = model
         self.tokenizer = tokenizer
         self.l1_C = l1_C
+        self.top_k = top_k
         self.batch_size = batch_size
         self.layer_stride = layer_stride
         self.validation_split = validation_split
@@ -172,7 +174,7 @@ class HProbes:
         self._intermediate_dim = next(iter(self._col_norms.values())).shape[0]
         self._n_features = len(self._layers) * self._intermediate_dim
         self._letter_ids = self._get_letter_ids()
-        top_k = min(5000, self._n_features)
+        top_k = min(self.top_k, self._n_features) if self.top_k > 0 else self._n_features
 
         print(f"[hprobes] Layers: {len(self._layers)}  |  Features: {self._n_features:,}")
 
@@ -314,7 +316,7 @@ class HProbes:
         self._intermediate_dim = next(iter(self._col_norms.values())).shape[0]
         self._n_features = len(self._layers) * self._intermediate_dim
         self._letter_ids = self._get_letter_ids()
-        top_k = min(5000, self._n_features)
+        top_k = min(self.top_k, self._n_features) if self.top_k > 0 else self._n_features
 
         print(
             f"[hprobes] Layers: {len(self._layers)}  |  Features: {self._n_features:,}  |  Mode: 3-vs-1"
