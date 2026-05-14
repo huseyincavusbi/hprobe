@@ -29,6 +29,10 @@ jobs:
           nproc
           echo "CPU Details:"
           lscpu | head -10
+          echo ""
+          echo "Memory Information:"
+          free -h | awk '/^Mem:/{print "Memory: " $2}'
+          free -h | awk '/^Swap:/{print "Swap: " $2}'
 
       - name: Set up Python
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
