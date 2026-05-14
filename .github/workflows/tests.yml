@@ -20,6 +20,19 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
+      - name: System info
+        run: |
+          echo "OS: $(uname -s)"
+          echo "Architecture: $(uname -m)"
+          echo "CPU cores: $(nproc)"
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            echo "Memory: $(free -h | awk '/^Mem:/{print $2}')"
+          elif [ "$RUNNER_OS" = "macOS" ]; then
+            echo "Memory: $(sysctl -n hw.memsize | awk '{printf "%.1f GB\n", $1/1e9}')"
+          fi
+          python3 --version
+          echo "Runner: $RUNNER_OS / $RUNNER_ARCH"
+
       - name: Free disk space (Linux)
         if: runner.os == 'Linux'
         run: |
@@ -46,6 +59,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: System info
+        run: |
+          echo "OS: $(uname -s)"
+          echo "Architecture: $(uname -m)"
+          echo "CPU cores: $(nproc)"
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            echo "Memory: $(free -h | awk '/^Mem:/{print $2}')"
+          elif [ "$RUNNER_OS" = "macOS" ]; then
+            echo "Memory: $(sysctl -n hw.memsize | awk '{printf "%.1f GB\n", $1/1e9}')"
+          fi
+          python3 --version
+          echo "Runner: $RUNNER_OS / $RUNNER_ARCH"
 
       - name: Set up Python 3.11
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6

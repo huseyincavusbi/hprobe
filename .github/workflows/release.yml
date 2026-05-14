@@ -19,6 +19,19 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
+      - name: System info
+        run: |
+          echo "OS: $(uname -s)"
+          echo "Architecture: $(uname -m)"
+          echo "CPU cores: $(nproc)"
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            echo "Memory: $(free -h | awk '/^Mem:/{print $2}')"
+          elif [ "$RUNNER_OS" = "macOS" ]; then
+            echo "Memory: $(sysctl -n hw.memsize | awk '{printf "%.1f GB\n", $1/1e9}')"
+          fi
+          python3 --version
+          echo "Runner: $RUNNER_OS / $RUNNER_ARCH"
+
       - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v5
 
       - name: Build
