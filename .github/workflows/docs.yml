@@ -26,14 +26,22 @@ jobs:
           uname -a
           echo ""
           echo "CPU Information:"
-          nproc
+          nproc 2>/dev/null || sysctl -n hw.ncpu
           echo "CPU Details:"
-          lscpu | head -10
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            sysctl -n machdep.cpu.brand_string 2>/dev/null
+            echo "CPU cores: $(sysctl -n hw.ncpu)"
+          else
+            lscpu | head -10
+          fi
           echo ""
           echo "Memory Information:"
-          free -h | awk '/^Mem:/{print "Memory: " $2}'
-          free -h | awk '/^Swap:/{print "Swap: " $2}'
-
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            vm_stat | head -5
+          else
+            free -h | awk '/^Mem:/{print "Memory: " $2}'
+            free -h | awk '/^Swap:/{print "Swap: " $2}'
+          fi
       - name: Set up Python
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
