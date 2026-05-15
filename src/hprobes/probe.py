@@ -249,6 +249,8 @@ class HProbes:
             self.h_neurons_, self.n_neurons_, self.neuron_ratio_ = [], 0, 0.0
             self.layer_distribution_ = {}
             self.is_fitted_ = True
+            self._clf = None
+            self._X_val, self._y_val = np.array([]), np.array([])
             print("[hprobes] Single-class training data — no H-Neurons found.")
             return self
         self._clf.fit(X_train, y_train)
@@ -481,12 +483,15 @@ class HProbes:
             self.h_neurons_, self.n_neurons_, self.neuron_ratio_ = [], 0, 0.0
             self.layer_distribution_ = {}
             self.is_fitted_ = True
+            self._clf = None
+            self._X_val, self._y_val = np.array([]), np.array([])
             print("[hprobes] Single-class training data — no H-Neurons found.")
             return self
         self._clf.fit(X_train, y_train)
 
         coef = self._clf.coef_[0]
         selected = np.where(coef > 0)[0]
+
         self.h_neurons_ = []
         for sel_idx in selected:
             flat_idx = int(self._top_k_idx[sel_idx])
@@ -521,6 +526,17 @@ class HProbes:
         """
         if not self.is_fitted_:
             raise RuntimeError(_NOT_FITTED_MSG)
+        if self._clf is None:
+            return {
+                "auroc": None,
+                "balanced_accuracy": None,
+                "random_baseline_auroc": None,
+                "random_baseline_balanced_accuracy": None,
+                "auroc_gap": None,
+                "n_h_neurons": 0,
+                "neuron_ratio_permille": 0.0,
+                "threshold": None,
+            }
 
         X_val, y_val = self._X_val, self._y_val
 
@@ -895,6 +911,17 @@ class HProbes:
         """
         if not self.is_fitted_:
             raise RuntimeError(_NOT_FITTED_MSG)
+        if self._clf is None:
+            return {
+                "auroc": None,
+                "balanced_accuracy": None,
+                "random_baseline_auroc": None,
+                "random_baseline_balanced_accuracy": None,
+                "auroc_gap": None,
+                "n_h_neurons": 0,
+                "neuron_ratio_permille": 0.0,
+                "threshold": None,
+            }
 
         X, y = [], []
         for sample in tqdm(samples, desc="CETT extraction (transfer)"):
@@ -1016,6 +1043,8 @@ class HProbes:
         """
         if not self.is_fitted_:
             raise RuntimeError(_NOT_FITTED_MSG)
+        if self._clf is None:
+            return 0.5
 
         tokens = self._tokenize(prompt)
 
