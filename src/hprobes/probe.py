@@ -21,7 +21,6 @@ from .cett import (
     forward_cett_at_token_batch,
     forward_cett_batch,
     forward_cett_dual_span,
-    forward_cett_span,
     precompute_col_norms,
     scale_h_neurons,
 )
@@ -521,7 +520,10 @@ class HProbes:
             auroc = roc_auc_score(y_val, scores)
             fpr, tpr, thresholds = roc_curve(y_val, scores)
             J = tpr - fpr
-            self.threshold_ = float(thresholds[int(J.argmax())])
+            if np.isfinite(thresholds).any() and J.max() > J.min():
+                self.threshold_ = float(thresholds[int(J.argmax())])
+            else:
+                self.threshold_ = 0.5
         except (ValueError, KeyError, RuntimeError, IndexError, TypeError) as e:
             logging.warning(f"Error: {e}")
             auroc = None
@@ -1021,7 +1023,10 @@ class HProbes:
 
         x = np.nan_to_num(cett_vec.numpy().astype(np.float32))
         x_sel = x[self._top_k_idx]
-        x_norm = (x_sel - self._col_mean) / (self._col_std + 1e-8)
+        if self._col_mean is not None and self._col_std is not None:
+            x_norm = (x_sel - self._col_mean) / (self._col_std + 1e-8)
+        else:
+            x_norm = x_sel
         return float(self._clf.predict_proba(x_norm.reshape(1, -1))[0, 1])
 
     def detect_batch(
@@ -1123,7 +1128,11 @@ class HProbes:
                 scores_batch = [0.0] * len(batch_prompts)
                 for j, i in enumerate(valid_idx):
                     x = np.nan_to_num(cett_matrix[j].numpy().astype(np.float32))
-                    x_norm = (x[self._top_k_idx] - self._col_mean) / (self._col_std + 1e-8)
+                    x_sel = x[self._top_k_idx]
+                    if self._col_mean is not None and self._col_std is not None:
+                        x_norm = (x_sel - self._col_mean) / (self._col_std + 1e-8)
+                    else:
+                        x_norm = x_sel
                     scores_batch[i] = float(self._clf.predict_proba(x_norm.reshape(1, -1))[0, 1])
 
                 all_scores.extend(scores_batch)
