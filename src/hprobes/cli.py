@@ -469,9 +469,9 @@ def _add_common_probe_args(p):
     p.add_argument(
         "--l1-c",
         type=float,
-        default=0.5,
+        default=1.0,
         dest="l1_c",
-        help="Inverse L1 regularisation strength (default: 0.5)",
+        help="Inverse L1 regularisation strength (default: 1.0)",
     )
     p.add_argument("--seed", type=int, default=42, help="Random seed (default: 42)")
     p.add_argument(
