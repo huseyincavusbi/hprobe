@@ -10,8 +10,6 @@ Formula
 where:
     z_{j,t}  = SwiGLU activation of neuron j at token t (input to W_down)
     h_t      = W_down · z_t  (FFN output vector at token t)
-
-Reference: arXiv:2512.01797
 """
 
 from typing import Dict, List, Tuple
@@ -276,6 +274,85 @@ def forward_cett_span(
         cett_parts.append(cett_agg)
 
     return torch.cat(cett_parts, dim=0)
+
+
+def forward_cett_dual_span(
+    model: torch.nn.Module,
+    tokens: Dict[str, torch.Tensor],
+    answer_start: int,
+    answer_end: int,
+    layers: List[int],
+    col_norms: Dict[int, torch.Tensor],
+    aggregation: str = "mean",
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """One forward pass → two CETT vectors: answer span and non-answer span.
+
+      CETT_{j,t} = |z_{j,t}| * ||W_down[:,j]|| / (||h_t|| + 1e-8)
+      CETT_answer  = mean_{t in A} CETT_{j,t}
+      CETT_other   = mean_{t not in A} CETT_{j,t}
+
+    Returns
+    -------
+    cett_answer : (n_layers * intermediate_dim,) float32 — aggregated answer span
+    cett_other  : (n_layers * intermediate_dim,) float32 — aggregated non-answer span
+    """
+    seq_len = tokens["input_ids"].shape[1]
+    z_cache: Dict[int, torch.Tensor] = {}
+    h_cache: Dict[int, torch.Tensor] = {}
+    handles = []
+
+    for layer_idx in layers:
+        down_proj = get_mlp_down_proj(model, layer_idx)
+
+        def make_hook(idx: int):
+            def hook(module, input, output):
+                z_cache[idx] = input[0][0].detach().float().cpu()
+                h_cache[idx] = output[0].detach().float().cpu()
+                return output
+
+            return hook
+
+        handles.append(down_proj.register_forward_hook(make_hook(layer_idx)))
+
+    try:
+        with torch.no_grad():
+            model(**tokens)
+    finally:
+        for h in handles:
+            h.remove()
+
+    cett_answer_parts = []
+    cett_other_parts = []
+
+    mask_other = torch.ones(seq_len, dtype=torch.bool)
+    mask_other[answer_start:answer_end] = False
+
+    for layer_idx in layers:
+        z = z_cache[layer_idx]
+        h = h_cache[layer_idx]
+        h_norm = torch.norm(h, dim=-1, keepdim=True) + 1e-8
+
+        cett_per_token = (torch.abs(z) * col_norms[layer_idx].unsqueeze(0)) / h_norm
+
+        cett_ans = cett_per_token[answer_start:answer_end]
+        if aggregation == "max":
+            cett_ans_agg = cett_ans.max(dim=0).values
+        else:
+            cett_ans_agg = cett_ans.mean(dim=0)
+
+        cett_oth = cett_per_token[mask_other]
+        if cett_oth.shape[0] > 0:
+            if aggregation == "max":
+                cett_oth_agg = cett_oth.max(dim=0).values
+            else:
+                cett_oth_agg = cett_oth.mean(dim=0)
+        else:
+            cett_oth_agg = torch.zeros_like(cett_ans_agg)
+
+        cett_answer_parts.append(cett_ans_agg)
+        cett_other_parts.append(cett_oth_agg)
+
+    return torch.cat(cett_answer_parts, dim=0), torch.cat(cett_other_parts, dim=0)
 
 
 def forward_cett_batch(

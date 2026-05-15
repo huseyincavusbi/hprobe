@@ -20,6 +20,7 @@ from .cett import (
     forward_cett_at_token,
     forward_cett_at_token_batch,
     forward_cett_batch,
+    forward_cett_dual_span,
     forward_cett_span,
     precompute_col_norms,
     scale_h_neurons,
@@ -44,7 +45,8 @@ class HProbes:
     tokenizer : transformers tokenizer
         Matching tokenizer for the model.
     l1_C : float
-        Inverse L1 regularisation strength. Lower = sparser neuron set. Default 0.01.
+        Inverse L1 regularisation strength (C=1/λ). Higher = less sparsity.
+        Default 1.0.
     contrastive : bool
         If True (default), uses 3-vs-1 labeling: CETT captured at the generated answer token,
         hallucinatory answers labeled 1, everything else 0.
@@ -71,7 +73,7 @@ class HProbes:
         self,
         model: torch.nn.Module,
         tokenizer,
-        l1_C: float = 0.01,
+        l1_C: float = 1.0,
         layer_stride: int = 1,
         validation_split: float = 0.2,
         seed: int = 42,
@@ -117,6 +119,7 @@ class HProbes:
         self._val_gt: List[str] = []
         self._X_val: Optional[np.ndarray] = None
         self._y_val: Optional[np.ndarray] = None
+        self._val_is_answer: Optional[np.ndarray] = None
         self._X_train_cache: Optional[np.ndarray] = None
         self._y_train_cache: Optional[np.ndarray] = None
 
@@ -207,11 +210,6 @@ class HProbes:
         del cett_raw
         y = np.array(train_labels)
 
-        self._col_mean = X.mean(axis=0)
-        self._col_std = X.std(axis=0)
-        self._col_std[self._col_std == 0] = 1.0
-        X = (X - self._col_mean) / self._col_std
-
         # --- Train/val split at sample level ---
         # Ground-truth correctness labels per sample (for stratification)
         sample_correct = np.array([int(p["is_correct"]) for p in per_sample])
@@ -244,7 +242,6 @@ class HProbes:
             solver="liblinear",
             l1_ratio=1,
             C=self.l1_C,
-            class_weight="balanced",
             max_iter=1000,
             random_state=self.seed,
         )
@@ -285,10 +282,14 @@ class HProbes:
         label_key: str = "judge",
         aggregation: str = "mean",
     ) -> "HProbes":
-        """Discover H-Neurons from pre-generated responses (3-vs-1 labeling).
+        """Discover H-Neurons from pre-generated responses.
 
-        Feeds the full Q+A sequence, captures CETT over the answer token span,
-        aggregates with mean/max. Hallucinatory answer tokens=1, everything else=0.
+        Methodology:
+          1. Tokenize full Q+A sequence
+          2. Compute per-token CETT: |z| * ||W_down|| / (||h|| + 1e-8)
+          3. Aggregate: mean over answer span, mean over non-answer span
+          4. Create 2 rows per sample: answer (label=correctness), other (label=0)
+          5. Train L1 logistic regression → positive-weight neurons = H-Neurons
 
         Parameters
         ----------
@@ -305,7 +306,7 @@ class HProbes:
             Key for the correctness label. Accepts "true"/"false" strings or 1/0 ints.
             Default "judge".
         aggregation : "mean" | "max"
-            How to aggregate CETT over the answer token span. Default "mean".
+            How to aggregate CETT over token spans. Default "mean".
 
         Returns
         -------
@@ -319,7 +320,7 @@ class HProbes:
         top_k = min(self.top_k, self._n_features) if self.top_k > 0 else self._n_features
 
         print(
-            f"[hprobes] Layers: {len(self._layers)}  |  Features: {self._n_features:,}  |  Mode: 3-vs-1"
+            f"[hprobes] Layers: {len(self._layers)}  |  Features: {self._n_features:,}  |  Mode: H-Neuron (dual-span)"
         )
 
         self._welford_n = 0
@@ -357,16 +358,38 @@ class HProbes:
                 full_text = f"{question}\n{response}"
 
             tokens = self._tokenize(full_text)
+            seq_len = tokens["input_ids"].shape[1]
 
-            # Find answer token span in the tokenized sequence
-            span = self._find_answer_span(tokens["input_ids"][0], ans_tokens)
-            if span is None:
+            # Compute answer span:
+            #   1. When answer_tokens are provided → find exact factual span in response
+            #   2. When chat template is used → compute response start position, use as fallback
+            #   3. Otherwise → use _find_answer_span on full sequence
+            if ans_tokens:
+                span = self._find_answer_span(tokens["input_ids"][0], ans_tokens)
+            else:
+                span = None
+
+            if span is not None:
+                span_start, span_end = span
+            elif (
+                hasattr(self.tokenizer, "apply_chat_template")
+                and self.tokenizer.chat_template is not None
+            ):
+                user_only = self.tokenizer.apply_chat_template(
+                    [{"role": "user", "content": question}],
+                    tokenize=False,
+                    add_generation_prompt=False,
+                )
+                user_tokens = self._tokenize(user_only)
+                input_len = user_tokens["input_ids"].shape[1] - 1
+                span_start = input_len + 1
+                span_end = seq_len
+            else:
                 skipped += 1
                 continue
-            span_start, span_end = span
 
             try:
-                vec_ans = forward_cett_span(
+                vec_ans, vec_other = forward_cett_dual_span(
                     self.model,
                     tokens,
                     span_start,
@@ -389,18 +412,10 @@ class HProbes:
             labels_ans.append(0 if is_correct else 1)  # 1 = hallucinatory
             self._welford_update(ans)
 
-            # Other tokens: CETT at last prompt token (before answer span) — 3-vs-1
-            try:
-                vec_other, _ = forward_cett(
-                    self.model, tokens, self._layers, self._col_norms, token_position=span_start - 1
-                )
-                oth = np.nan_to_num(vec_other.numpy().astype(np.float32))
-                cett_other.append(oth)
-                labels_other.append(0)  # always negative
-                self._welford_update(oth)
-            except (ValueError, KeyError, RuntimeError, IndexError, TypeError) as e:
-                logging.warning(f"Error: {e}")
-                pass
+            oth = np.nan_to_num(vec_other.numpy().astype(np.float32))
+            cett_other.append(oth)
+            labels_other.append(0)  # always negative (non-answer tokens)
+            self._welford_update(oth)
 
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
@@ -423,10 +438,6 @@ class HProbes:
 
         X = np.stack([v[self._top_k_idx] for v in cett_all], axis=0)
         y = np.array(y_all)
-        self._col_mean = X.mean(axis=0)
-        self._col_std = X.std(axis=0)
-        self._col_std[self._col_std == 0] = 1.0
-        X = (X - self._col_mean) / self._col_std
 
         # Sample-level train/val split
         sample_correct = np.array([int(p["is_correct"]) for p in per_sample])
@@ -448,12 +459,14 @@ class HProbes:
         self._X_val, self._y_val = X_val, y_val
         self._val_prompts = [valid_prompts[i] for i in val_s]
         self._val_gt = [valid_gt[i] for i in val_s]
+        # Evaluation protocol: answer-token rows only (strip non-answer controls)
+        ans_count = len(cett_ans)
+        self._val_is_answer = np.array([idx < ans_count for idx in val_rows])
 
         self._clf = LogisticRegression(
             solver="liblinear",
             l1_ratio=1,
             C=self.l1_C,
-            class_weight="balanced",
             max_iter=1000,
             random_state=self.seed,
         )
@@ -498,6 +511,11 @@ class HProbes:
 
         X_val, y_val = self._X_val, self._y_val
 
+        # Evaluation protocol: answer-token rows only
+        if self._val_is_answer is not None:
+            X_val = X_val[self._val_is_answer]
+            y_val = y_val[self._val_is_answer]
+
         try:
             scores = self._clf.predict_proba(X_val)[:, 1]
             auroc = roc_auc_score(y_val, scores)
@@ -522,7 +540,6 @@ class HProbes:
                 solver="liblinear",
                 l1_ratio=1,
                 C=self.l1_C,
-                class_weight="balanced",
                 max_iter=1000,
                 random_state=self.seed,
             )
@@ -800,7 +817,6 @@ class HProbes:
             solver="liblinear",
             l1_ratio=1,
             C=config["l1_C"],
-            class_weight="balanced",
             max_iter=1000,
             penalty="l1",
         )
@@ -922,7 +938,6 @@ class HProbes:
                 solver="liblinear",
                 l1_ratio=1,
                 C=self.l1_C,
-                class_weight="balanced",
                 max_iter=1000,
                 random_state=self.seed,
             )
@@ -1350,37 +1365,15 @@ class HProbes:
                 valid_gt.append(gt)
                 per_sample.append({"predicted": pred, "ground_truth": gt, "is_correct": is_correct})
 
-                # 1. Decision Token (The Answer)
-                letter_token_id = self._letter_ids.get(pred)
-                if letter_token_id is not None:
-                    try:
-                        sample_tokens = self._tokenize(prompt)
-                        cett_ans = forward_cett_at_token(
-                            self.model,
-                            sample_tokens,
-                            letter_token_id,
-                            self._layers,
-                            self._col_norms,
-                        )
-                        ans_vec = np.nan_to_num(cett_ans.numpy().astype(np.float32))
-                        cett_raw.append(ans_vec)
-                        # Use custom label function or default hallucination labeling
-                        train_labels.append(label_fn(pred, gt, sample))
-                        row_to_sample.append(sample_pos)
-                        self._welford_update(ans_vec)
-                    except Exception as e:
-                        logging.warning(f"Error extracting decision CETT: {e}")
-
-                    # 2. Prompt Token (1 Negative Control per the paper's 3-vs-1 ratio)
-                    try:
-                        # cett_matrix[i] is already the last prompt token from the batch pass
-                        last_prompt_vec = np.nan_to_num(cett_matrix[i].numpy().astype(np.float32))
-                        cett_raw.append(last_prompt_vec)
-                        train_labels.append(0)
-                        row_to_sample.append(sample_pos)
-                        self._welford_update(last_prompt_vec)
-                    except Exception as e:
-                        logging.warning(f"Error extracting prompt control in batch: {e}")
+                # Decision feature: last prompt token CETT (the model's pre-decision state)
+                try:
+                    last_prompt_vec = np.nan_to_num(cett_matrix[i].numpy().astype(np.float32))
+                    cett_raw.append(last_prompt_vec)
+                    train_labels.append(label_fn(pred, gt, sample))
+                    row_to_sample.append(sample_pos)
+                    self._welford_update(last_prompt_vec)
+                except Exception as e:
+                    logging.warning(f"Error extracting prompt CETT in batch: {e}")
 
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
@@ -1437,44 +1430,15 @@ class HProbes:
                 }
             )
 
-            # 1. Decision Token (The Answer)
-            letter_token_id = self._letter_ids.get(pred)
-            if letter_token_id is not None:
-                try:
-                    cett_ans = forward_cett_at_token(
-                        self.model, tokens, letter_token_id, self._layers, self._col_norms
-                    )
-                    ans_vec = np.nan_to_num(cett_ans.numpy().astype(np.float32))
-                    cett_raw.append(ans_vec)
-                    train_labels.append(label_fn(pred, gt, sample))
-                    row_to_sample.append(sample_pos)
-                    self._welford_update(ans_vec)
-                except Exception as e:
-                    logging.warning(f"Error extracting decision CETT: {e}")
-
-            # 2. Prompt Tokens (Aggregate mean CETT over entire prompt as Negative Control)
+            # Decision feature: last prompt token CETT (the model's pre-decision state)
             try:
-                # Get CETT for the whole prompt span
-                seq_len = tokens["input_ids"].shape[1]
-                # forward_cett_span expects a span (start, end)
-                # tokens is the prompt + answer_cue
-                # span is 0 to seq_len
-                neg_vec_torch = forward_cett_span(
-                    self.model,
-                    tokens,
-                    0,
-                    seq_len,
-                    self._layers,
-                    self._col_norms,
-                    aggregation="mean",
-                )
-                neg_vec = np.nan_to_num(neg_vec_torch.numpy().astype(np.float32))
-                cett_raw.append(neg_vec)
-                train_labels.append(0)
+                cett_vec_np = np.nan_to_num(cett_vec.numpy().astype(np.float32))
+                cett_raw.append(cett_vec_np)
+                train_labels.append(label_fn(pred, gt, sample))
                 row_to_sample.append(sample_pos)
-                self._welford_update(neg_vec)
+                self._welford_update(cett_vec_np)
             except Exception as e:
-                logging.warning(f"Error extracting prompt control aggregate: {e}")
+                logging.warning(f"Error extracting decision CETT: {e}")
 
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
