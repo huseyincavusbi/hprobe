@@ -27,7 +27,7 @@ def test_full_pipeline_with_gpt2(gpt2_setup):
     model, tokenizer = gpt2_setup
 
     # Initialize probe
-    probe = HProbes(model, tokenizer, layer_stride=2)
+    probe = HProbes(model, tokenizer, l1_C=10, layer_stride=2)
 
     # Tiny dataset in MedQA format (dict options + letter answer)
     samples = [
@@ -46,6 +46,12 @@ def test_full_pipeline_with_gpt2(gpt2_setup):
             "question": "What color is the sky?",
             "options": {"A": "Blue", "B": "Green"},
             "answer_idx": "A",
+        },
+        {"question": "What is H2O?", "options": {"A": "Water", "B": "Gold"}, "answer_idx": "A"},
+        {
+            "question": "How many legs does a cat have?",
+            "options": {"A": "3", "B": "4"},
+            "answer_idx": "B",
         },
     ]
 

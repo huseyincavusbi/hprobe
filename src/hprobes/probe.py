@@ -244,6 +244,13 @@ class HProbes:
             max_iter=1000,
             random_state=self.seed,
         )
+        n_classes = len(np.unique(y_train))
+        if n_classes < 2:
+            self.h_neurons_, self.n_neurons_, self.neuron_ratio_ = [], 0, 0.0
+            self.layer_distribution_ = {}
+            self.is_fitted_ = True
+            print("[hprobes] Single-class training data — no H-Neurons found.")
+            return self
         self._clf.fit(X_train, y_train)
 
         coef = self._clf.coef_[0]
@@ -469,6 +476,13 @@ class HProbes:
             max_iter=1000,
             random_state=self.seed,
         )
+        n_classes = len(np.unique(y_train))
+        if n_classes < 2:
+            self.h_neurons_, self.n_neurons_, self.neuron_ratio_ = [], 0, 0.0
+            self.layer_distribution_ = {}
+            self.is_fitted_ = True
+            print("[hprobes] Single-class training data — no H-Neurons found.")
+            return self
         self._clf.fit(X_train, y_train)
 
         coef = self._clf.coef_[0]
