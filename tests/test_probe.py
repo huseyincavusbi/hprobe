@@ -116,7 +116,7 @@ SAMPLES = [
 ]
 
 # Fitted probe shared across tests in this module
-_PROBE = HProbes(MODEL, TOK, l1_C=0.5)
+_PROBE = HProbes(MODEL, TOK, l1_C=10)
 _PROBE.fit(SAMPLES, options_key="options", answer_key="answer")
 
 

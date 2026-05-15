@@ -37,6 +37,8 @@ def test_full_pipeline_with_gpt2(gpt2_setup):
             "answer_idx": "A",
         },
         {"question": "What is 2+2?", "options": {"A": "3", "B": "4"}, "answer_idx": "B"},
+        {"question": "What is the largest ocean?", "options": {"A": "Atlantic", "B": "Pacific"}, "answer_idx": "B"},
+        {"question": "What color is the sky?", "options": {"A": "Blue", "B": "Green"}, "answer_idx": "A"},
     ]
 
     # Run fit
