@@ -249,6 +249,8 @@ class HProbes:
             self.h_neurons_, self.n_neurons_, self.neuron_ratio_ = [], 0, 0.0
             self.layer_distribution_ = {}
             self.is_fitted_ = True
+            self._clf = None
+            self._X_val, self._y_val = np.array([]), np.array([])
             print("[hprobes] Single-class training data — no H-Neurons found.")
             return self
         self._clf.fit(X_train, y_train)
@@ -481,6 +483,8 @@ class HProbes:
             self.h_neurons_, self.n_neurons_, self.neuron_ratio_ = [], 0, 0.0
             self.layer_distribution_ = {}
             self.is_fitted_ = True
+            self._clf = None
+            self._X_val, self._y_val = np.array([]), np.array([])
             print("[hprobes] Single-class training data — no H-Neurons found.")
             return self
         self._clf.fit(X_train, y_train)
@@ -521,193 +525,13 @@ class HProbes:
         """
         if not self.is_fitted_:
             raise RuntimeError(_NOT_FITTED_MSG)
-
-        X_val, y_val = self._X_val, self._y_val
-
-        # Evaluation protocol: answer-token rows only
-        if self._val_is_answer is not None:
-            X_val = X_val[self._val_is_answer]
-            y_val = y_val[self._val_is_answer]
-
-        try:
-            scores = self._clf.predict_proba(X_val)[:, 1]
-            auroc = roc_auc_score(y_val, scores)
-            fpr, tpr, thresholds = roc_curve(y_val, scores)
-            J = tpr - fpr
-            if np.isfinite(thresholds).any() and J.max() > J.min():
-                self.threshold_ = float(thresholds[int(J.argmax())])
-            else:
-                self.threshold_ = 0.5
-        except (ValueError, KeyError, RuntimeError, IndexError, TypeError) as e:
-            logging.warning(f"Error: {e}")
-            auroc = None
-
-        preds = self._clf.predict(X_val)
-        bal_acc = balanced_accuracy_score(y_val, preds)
-
-        # Random neuron baseline — same N neurons, same probe, same hyperparams
-        rand_auroc, rand_bal_acc = None, None
-        if self.n_neurons_ > 0:
-            rng = np.random.RandomState(self.seed + 1)
-            top_k = len(self._top_k_idx)
-            rand_idx = rng.choice(top_k, size=min(self.n_neurons_, top_k), replace=False)
-
-            clf_rand = LogisticRegression(
-                solver="liblinear",
-                l1_ratio=1,
-                C=self.l1_C,
-                max_iter=1000,
-                random_state=self.seed,
-            )
-            clf_rand.fit(self._X_train_cache[:, rand_idx], self._y_train_cache)
-
-            try:
-                rand_scores = clf_rand.predict_proba(X_val[:, rand_idx])[:, 1]
-                rand_auroc = roc_auc_score(y_val, rand_scores)
-            except (ValueError, KeyError, RuntimeError, IndexError, TypeError) as e:
-                logging.warning(f"Error: {e}")
-                pass
-            rand_preds = clf_rand.predict(X_val[:, rand_idx])
-            rand_bal_acc = balanced_accuracy_score(y_val, rand_preds)
-
-        gap = (auroc - rand_auroc) if (auroc is not None and rand_auroc is not None) else None
-
-        if gap is not None:
-            print(f"[hprobes] AUROC: {auroc:.3f}  |  Random: {rand_auroc:.3f}  |  Gap: {gap:+.3f}")
-
-        self.score_results_ = {
-            "auroc": auroc,
-            "balanced_accuracy": bal_acc,
-            "random_baseline_auroc": rand_auroc,
-            "random_baseline_balanced_accuracy": rand_bal_acc,
-            "auroc_gap": gap,
-            "n_h_neurons": self.n_neurons_,
-            "neuron_ratio_permille": self.neuron_ratio_,
-            "threshold": self.threshold_,
-        }
-        return self.score_results_
-
-    def causal_validate(
-        self,
-        alphas: List[float] = None,
-    ) -> Dict[float, float]:
-        """Scale H-Neuron activations by each alpha and measure accuracy on val split.
-
-        Labeling convention (Incorrect=1):
-            suppression (alpha<1) should INCREASE accuracy,
-            amplification (alpha>1) should DECREASE accuracy.
-
-        Returns
-        -------
-        dict mapping alpha → accuracy
-        """
-        if not self.is_fitted_:
-            raise RuntimeError(_NOT_FITTED_MSG)
-        if not self.h_neurons_:
-            print("[hprobes] No H-Neurons found — skipping causal validation.")
-            return {}
-
-        alphas = alphas or [0.0, 0.5, 1.0, 1.5, 2.0]
-        results = {}
-
-        for alpha in alphas:
-            correct, total = 0, 0
-            for prompt, gt in zip(self._val_prompts, self._val_gt):
-                tokens = self._tokenize(prompt)
-                try:
-                    logits = scale_h_neurons(
-                        self.model, tokens, self.h_neurons_, alpha, self._layers
-                    )
-                    pred = self._predict_letter(logits)
-                    correct += int(pred == gt)
-                    total += 1
-                except (ValueError, KeyError, RuntimeError, IndexError, TypeError) as e:
-                    logging.warning(f"Error: {e}")
-                    continue
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
-
-            results[alpha] = correct / total if total > 0 else 0.0
-
-        self.cv_results_ = results
-        return results
-
-    def compare_with(self, other: "HProbes") -> Dict[str, Any]:
-        """Compare H-Neurons with another fitted probe.
-
-        Computes Jaccard similarity and overlap statistics between the H-Neuron
-        sets identified by this probe and another probe. Useful for:
-        - Testing stability across different C values (AP-6)
-        - Comparing base vs fine-tuned models (AP-4)
-        - Cross-model comparisons (AP-12)
-
-        Parameters
-        ----------
-        other : HProbes
-            Another fitted probe to compare against.
-
-        Returns
-        -------
-        dict with keys:
-            jaccard_similarity : float
-                Jaccard index (intersection / union), range [0, 1]
-            n_shared : int
-                Number of neurons in both sets
-            n_union : int
-                Total unique neurons across both sets
-            n_only_self : int
-                Neurons only in this probe
-            n_only_other : int
-                Neurons only in the other probe
-            shared_neurons : list of [layer, neuron] pairs
-                The actual shared neurons, sorted by layer then neuron index
-
-        Examples
-        --------
-        >>> probe1 = HProbes(model, tok, l1_C=0.1).fit(samples)
-        >>> probe2 = HProbes(model, tok, l1_C=1.0).fit(samples)
-        >>> comparison = probe1.compare_with(probe2)
-        >>> print(f"Jaccard: {comparison['jaccard_similarity']:.3f}")
-        >>> print(f"Shared: {comparison['n_shared']} neurons")
-        """
-        if not self.is_fitted_:
-            raise RuntimeError("This probe must be fitted before comparison")
-        if not other.is_fitted_:
-            raise RuntimeError("Other probe must be fitted before comparison")
-
-        set_self = set(self.h_neurons_)
-        set_other = set(other.h_neurons_)
-
-        intersection = set_self & set_other
-        union = set_self | set_other
-
-        return {
-            "jaccard_similarity": len(intersection) / len(union) if union else 0.0,
-            "n_shared": len(intersection),
-            "n_union": len(union),
-            "n_only_self": len(set_self - set_other),
-            "n_only_other": len(set_other - set_self),
-            "shared_neurons": sorted([list(n) for n in intersection]),
-        }
-
-    def save(self, path: str) -> Path:
-        """Save probe results and classifier to disk.
-
-        Writes two files:
-        - ``<path>.json`` — human-readable results (neurons, scores, cv)
-        - ``<path>.pkl``  — serialized classifier for transfer experiments
-
-        Parameters
-        ----------
-        path : str
-            Base path (e.g. "results/gemma_medqa"). Extensions are added automatically.
-
-        Returns
-        -------
-        Path to the JSON file.
-        """
-        if not self.is_fitted_:
-            raise RuntimeError(_NOT_FITTED_MSG)
+        if self._clf is None:
+            return {
+                "auroc": None, "balanced_accuracy": None,
+                "random_baseline_auroc": None, "random_baseline_balanced_accuracy": None,
+                "auroc_gap": None, "n_h_neurons": 0, "neuron_ratio_permille": 0.0,
+                "threshold": None,
+            }
 
         p = Path(path)
         p.parent.mkdir(parents=True, exist_ok=True)
@@ -895,6 +719,13 @@ class HProbes:
         """
         if not self.is_fitted_:
             raise RuntimeError(_NOT_FITTED_MSG)
+        if self._clf is None:
+            return {
+                "auroc": None, "balanced_accuracy": None,
+                "random_baseline_auroc": None, "random_baseline_balanced_accuracy": None,
+                "auroc_gap": None, "n_h_neurons": 0, "neuron_ratio_permille": 0.0,
+                "threshold": None,
+            }
 
         X, y = [], []
         for sample in tqdm(samples, desc="CETT extraction (transfer)"):
@@ -1016,6 +847,8 @@ class HProbes:
         """
         if not self.is_fitted_:
             raise RuntimeError(_NOT_FITTED_MSG)
+        if self._clf is None:
+            return 0.5
 
         tokens = self._tokenize(prompt)
 
@@ -1073,6 +906,8 @@ class HProbes:
         """
         if not self.is_fitted_:
             raise RuntimeError(_NOT_FITTED_MSG)
+        if self._clf is None:
+            return 0.5
 
         bs = batch_size or self.batch_size
         device = next(self.model.parameters()).device
