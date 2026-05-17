@@ -87,6 +87,65 @@ def available_layers(model: torch.nn.Module) -> List[int]:
     return list(range(len(_get_transformer_layers(model))))
 
 
+def _find_safetensors_files(model: torch.nn.Module):
+    """Locate safetensors files for a model loaded from HF Hub."""
+    import glob as _glob
+    import json as _json
+    from pathlib import Path as _Path
+
+    config = getattr(model, "config", None)
+    if config is None:
+        return {}
+    model_dir = getattr(config, "_name_or_path", None)
+    if model_dir is None:
+        return {}
+
+    candidate_dirs = [
+        model_dir if _Path(model_dir).is_dir() else None,
+        _Path.home() / ".cache" / "huggingface" / "hub" / f"models--{model_dir.replace('/', '--')}",
+    ]
+    for base in candidate_dirs:
+        if base is None or not _Path(base).is_dir():
+            continue
+        index_path = _Path(base) / "model.safetensors.index.json"
+        if index_path.exists():
+            with open(index_path) as fh:
+                index = _json.load(fh)
+            weight_map = index.get("weight_map", {})
+            return {_Path(base) / fn for fn in set(weight_map.values())}
+        shards = list(_glob.glob(str(_Path(base) / "model*.safetensors")))
+        if shards:
+            return {_Path(s) for s in shards}
+    return {}
+
+
+def _materialize_meta_weight(model: torch.nn.Module, weight: torch.Tensor, param_name: str):
+    """Materialize a meta-device weight by loading it from safetensors on disk."""
+    import safetensors.torch as _sft
+
+    if weight.device.type != "meta":
+        return weight
+
+    shard_paths = _find_safetensors_files(model)
+    for shard_path in sorted(shard_paths):
+        try:
+            with _sft.safe_open(str(shard_path), framework="pt") as f:
+                if param_name in f.keys():
+                    return f.get_tensor(param_name).float()
+        except Exception:
+            continue
+    return weight
+
+
+def _get_weight_name(model: torch.nn.Module, layer_idx: int) -> str:
+    """Find the full parameter name for a layer's down_proj.weight in the model."""
+    down_proj = get_mlp_down_proj(model, layer_idx)
+    for name, param in model.named_parameters():
+        if param is down_proj.weight:
+            return name
+    return f"model.layers.{layer_idx}.mlp.down_proj.weight"
+
+
 def precompute_col_norms(
     model: torch.nn.Module,
     layers: List[int],
@@ -99,13 +158,14 @@ def precompute_col_norms(
     col_norms = {}
     for layer_idx in layers:
         down_proj = get_mlp_down_proj(model, layer_idx)
-        W = down_proj.weight.detach().float()  # (hidden_dim, intermediate_dim) usually
+        W = down_proj.weight.detach().float()
+        if W.device.type == "meta":
+            W = _materialize_meta_weight(model, W, _get_weight_name(model, layer_idx))
 
-        # GPT-2 uses Conv1D where weight is (intermediate_dim, hidden_dim)
         if type(down_proj).__name__ == "Conv1D":
-            col_norms[layer_idx] = torch.norm(W, dim=1).cpu()  # (intermediate_dim,)
+            col_norms[layer_idx] = torch.norm(W, dim=1).cpu()
         else:
-            col_norms[layer_idx] = torch.norm(W, dim=0).cpu()  # (intermediate_dim,)
+            col_norms[layer_idx] = torch.norm(W, dim=0).cpu()
     return col_norms
 
 
