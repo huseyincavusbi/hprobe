@@ -100,20 +100,27 @@ def _find_safetensors_files(model: torch.nn.Module):
     if model_dir is None:
         return {}
 
-    candidate_dirs = [
-        model_dir if _Path(model_dir).is_dir() else None,
-        _Path.home() / ".cache" / "huggingface" / "hub" / f"models--{model_dir.replace('/', '--')}",
-    ]
-    for base in candidate_dirs:
-        if base is None or not _Path(base).is_dir():
-            continue
-        index_path = _Path(base) / "model.safetensors.index.json"
+    snapshot_dirs = []
+    if _Path(model_dir).is_dir():
+        snapshot_dirs.append(_Path(model_dir))
+
+    cache_root = _Path.home() / ".cache" / "huggingface" / "hub"
+    model_cache = cache_root / f"models--{model_dir.replace('/', '--')}"
+    if model_cache.is_dir():
+        snapshots_root = model_cache / "snapshots"
+        if snapshots_root.is_dir():
+            for snapshot in snapshots_root.iterdir():
+                if snapshot.is_dir():
+                    snapshot_dirs.append(snapshot)
+
+    for base in snapshot_dirs:
+        index_path = base / "model.safetensors.index.json"
         if index_path.exists():
             with open(index_path) as fh:
                 index = _json.load(fh)
             weight_map = index.get("weight_map", {})
-            return {_Path(base) / fn for fn in set(weight_map.values())}
-        shards = list(_glob.glob(str(_Path(base) / "model*.safetensors")))
+            return {base / fn for fn in set(weight_map.values())}
+        shards = list(_glob.glob(str(base / "model*.safetensors")))
         if shards:
             return {_Path(s) for s in shards}
     return {}
